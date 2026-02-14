@@ -142,7 +142,7 @@ python scripts/generate_hwpx.py \
 HWPX-CLAUDE-SKILL/
 ├── SKILL.md              # Claude Skill 정의 (트리거 규칙, 형식 문서)
 ├── README.md             # 이 파일
-├── LICENSE               # MIT 라이선스
+├── LICENSE               # GPL v3 라이선스
 ├── .gitignore
 ├── assets/
 │   └── template.hwpx     # 기본 템플릿 (이노베이션아카데미 표준 보고서)
@@ -213,7 +213,7 @@ HWPX-CLAUDE-SKILL/
 
 ## 라이선스
 
-MIT 라이선스 — 자세한 내용은 [LICENSE](LICENSE)를 참조하세요.
+이 프로젝트는 [GNU General Public License v3.0](https://www.gnu.org/licenses/gpl-3.0.html) 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE)를 참조하세요.
 
 ## 기여하기
 
