@@ -459,7 +459,7 @@ def table_cell_xml(col_addr, row_addr, width, height, border_fill_id,
                    para_pr_id, char_pr_id, text, vert_align="CENTER",
                    style_id="0", vertsize=1200, textheight=1200, baseline=1020, spacing=360):
     """Generate a table cell element with multi-line support."""
-    inner_hz = width - 1020  # 510*2 margins
+    inner_hz = width - 1022  # Hancom uses width-1022 (e.g. 15874→14852)
     inner_hz = max(inner_hz, 0)
 
     # Estimate lines for cell text
@@ -489,7 +489,7 @@ def table_cell_xml(col_addr, row_addr, width, height, border_fill_id,
 def title_bar_xml(title_text, sm, table_id=1975012386):
     """Generate the 3-row title bar (gradient top, title, gradient bottom)."""
     bar_width = 48077
-    hz = bar_width - 282
+    hz = bar_width - 281  # Hancom uses 47796 (not 47795)
 
     top = sm["title_bar_top"]
     mid = sm["title_bar_title"]
@@ -778,7 +778,7 @@ def generate_content_item(item, sm, vpt):
 # Section Generators
 # ============================================================================
 
-def generate_body_section_xml(section_config, sm, outline_ref="3"):
+def generate_body_section_xml(section_config, sm, outline_ref="2"):
     """Generate a body section with title bar and content."""
     title = section_config.get("title_bar", "보고서 제목")
     content_items = section_config.get("content", [])
@@ -836,7 +836,7 @@ def generate_body_section_xml(section_config, sm, outline_ref="3"):
                                                      baseline=ss[4], spacing=ss[5]))
         paragraphs += generate_content_item(item, sm, vpt)
 
-    return f'<?xml version="1.0" ?><hs:sec {NS_DECL}>{paragraphs}</hs:sec>'
+    return f'<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hs:sec {NS_DECL}>{paragraphs}</hs:sec>'
 
 
 def generate_appendix_section_xml(section_config, sm, outline_ref="2"):
@@ -881,7 +881,7 @@ def generate_appendix_section_xml(section_config, sm, outline_ref="2"):
                                                      baseline=ss[4], spacing=ss[5]))
         paragraphs += generate_content_item(item, sm, vpt)
 
-    return f'<?xml version="1.0" ?><hs:sec {NS_DECL}>{paragraphs}</hs:sec>'
+    return f'<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hs:sec {NS_DECL}>{paragraphs}</hs:sec>'
 
 
 # ============================================================================
@@ -963,7 +963,7 @@ def generate_content_hpf(num_sections, has_images=True, title="보고서", creat
         ('config', 'urn:oasis:names:tc:opendocument:xmlns:config:1.0'),
     ])
 
-    return (f'<?xml version="1.0" ?><opf:package {ns_block} version="" unique-identifier="" id="">'
+    return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><opf:package {ns_block} version="" unique-identifier="" id="">'
             f'<opf:metadata><opf:title>{xml_escape(title)}</opf:title><opf:language>ko</opf:language>'
             f'<opf:meta name="creator" content="text">{xml_escape(creator)}</opf:meta>'
             f'<opf:meta name="subject" content="text"/><opf:meta name="description" content="text"/>'
@@ -989,6 +989,161 @@ def generate_container_rdf(num_sections):
           '<rdf:type rdf:resource="http://www.hancom.co.kr/hwpml/2016/meta/pkg#Document"/></rdf:Description>')
     return (f'<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>'
             f'<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">{d}</rdf:RDF>')
+
+
+# ============================================================================
+# Header.xml Style Trimming (post-processing)
+# ============================================================================
+
+def trim_unused_styles(contents_dir):
+    """
+    Post-process header.xml and section files to remove unused styles.
+
+    Hancom Office removes unused charPr/paraPr entries from header.xml when
+    saving, and renumbers all IDRef values. This function mimics that behavior
+    to minimize diffs between skill-generated and Hancom-saved files.
+
+    Steps:
+    1. Scan all section XMLs to collect actually-used charPrIDRef, paraPrIDRef,
+       and borderFillIDRef values
+    2. Parse header.xml to find all defined style entries
+    3. Remove unused entries (keeping ID 0 always)
+    4. Build old→new ID mapping based on new sequential positions
+    5. Apply remapping to header.xml and all section XMLs
+    """
+    header_path = contents_dir / "header.xml"
+    if not header_path.exists():
+        return
+
+    # Collect section files
+    section_files = sorted(contents_dir.glob("section*.xml"))
+    if not section_files:
+        return
+
+    # Step 1: Scan all sections for used IDs
+    used_char_ids = set()
+    used_para_ids = set()
+    used_bf_ids = set()
+
+    for sf in section_files:
+        content = sf.read_text(encoding="utf-8")
+        used_char_ids.update(re.findall(r'charPrIDRef="(\d+)"', content))
+        used_para_ids.update(re.findall(r'paraPrIDRef="(\d+)"', content))
+        used_bf_ids.update(re.findall(r'borderFillIDRef="(\d+)"', content))
+
+    # Also scan header.xml for IDs referenced by styles and other internal elements
+    hdr_content = header_path.read_text(encoding="utf-8")
+    # Styles reference charPr/paraPr IDs that must be kept even if not in sections
+    style_char_refs = set(re.findall(r'<hh:style[^>]*charPrIDRef="(\d+)"', hdr_content))
+    style_para_refs = set(re.findall(r'<hh:style[^>]*paraPrIDRef="(\d+)"', hdr_content))
+    used_char_ids.update(style_char_refs)
+    used_para_ids.update(style_para_refs)
+
+    # Step 2: Parse header.xml to find defined IDs
+    # charPr entries: <hh:charPr id="N" ...>
+    char_pr_entries = list(re.finditer(r'<hh:charPr\s+id="(\d+)"', hdr_content))
+    para_pr_entries = list(re.finditer(r'<hh:paraPr\s+id="(\d+)"', hdr_content))
+
+    defined_char_ids = {m.group(1) for m in char_pr_entries}
+    defined_para_ids = {m.group(1) for m in para_pr_entries}
+
+    # Step 3: Determine which to keep (always keep id="0")
+    keep_char_ids = (used_char_ids & defined_char_ids) | {"0"}
+    keep_para_ids = (used_para_ids & defined_para_ids) | {"0"}
+
+    # If nothing to remove, skip
+    remove_char = defined_char_ids - keep_char_ids
+    remove_para = defined_para_ids - keep_para_ids
+    if not remove_char and not remove_para:
+        return
+
+    # Step 4: Remove unused entries from header.xml and build remapping
+    # Process charPr entries - find full elements and remove unused ones
+    # charPr elements are self-contained: <hh:charPr id="N" ...>...</hh:charPr>
+    # or self-closing: <hh:charPr id="N" .../>
+
+    def remove_and_remap_entries(content, tag, remove_ids):
+        """Remove entries with given IDs and renumber remaining ones sequentially."""
+        if not remove_ids:
+            return content, {}
+
+        # Find all entries of this tag
+        # Must match EITHER:
+        #   - Self-closing: <hh:tag id="N" ... /> (no nested children)
+        #   - Paired: <hh:tag id="N" ...>...</hh:tag> (with nested children)
+        # Use explicit closing tag match to avoid stopping at nested self-closing children
+        pattern = re.compile(
+            rf'(<hh:{tag}\s+id=")(\d+)("(?:[^<]*/>|.*?</hh:{tag}>))',
+            re.DOTALL
+        )
+
+        # First pass: collect entries in order, mark for removal
+        entries = []
+        for m in pattern.finditer(content):
+            old_id = m.group(2)
+            entries.append((m.start(), m.end(), old_id, old_id in remove_ids))
+
+        # Build old→new ID mapping (sequential, starting from 0)
+        id_map = {}
+        new_id = 0
+        for _, _, old_id, should_remove in entries:
+            if not should_remove:
+                id_map[old_id] = str(new_id)
+                new_id += 1
+
+        # Second pass: rebuild content (process in reverse to preserve positions)
+        for start, end, old_id, should_remove in reversed(entries):
+            if should_remove:
+                # Remove the entry (and any preceding whitespace/newline)
+                rm_start = start
+                while rm_start > 0 and content[rm_start - 1] in ' \t\n\r':
+                    rm_start -= 1
+                content = content[:rm_start] + content[end:]
+            else:
+                # Update the id attribute with new sequential value
+                new_val = id_map[old_id]
+                segment = content[start:end]
+                segment = re.sub(rf'(id="){old_id}(")', rf'\g<1>{new_val}\2', segment, count=1)
+                content = content[:start] + segment + content[end:]
+
+        return content, id_map
+
+    hdr_content, char_id_map = remove_and_remap_entries(hdr_content, "charPr", remove_char)
+    hdr_content, para_id_map = remove_and_remap_entries(hdr_content, "paraPr", remove_para)
+
+    # Update charPrCount and paraPrCount in header
+    remaining_char = len(defined_char_ids) - len(remove_char)
+    remaining_para = len(defined_para_ids) - len(remove_para)
+    hdr_content = re.sub(r'(charPrCount=")(\d+)(")', rf'\g<1>{remaining_char}\3', hdr_content)
+    hdr_content = re.sub(r'(paraPrCount=")(\d+)(")', rf'\g<1>{remaining_para}\3', hdr_content)
+
+    # Step 5: Apply ID remapping everywhere (single-pass to avoid double-remap)
+    def remap_attr(content, attr_name, id_map):
+        """Single-pass regex replace to remap attribute values."""
+        active_map = {k: v for k, v in id_map.items() if k != v}
+        if not active_map:
+            return content
+        def replacer(m):
+            old = m.group(1)
+            return f'{attr_name}="{active_map.get(old, old)}"'
+        return re.sub(rf'{attr_name}="(\d+)"', replacer, content)
+
+    # Remap charPrIDRef and paraPrIDRef references WITHIN header.xml itself
+    # (e.g., <hh:style> elements reference charPr/paraPr by IDRef)
+    hdr_content = remap_attr(hdr_content, "charPrIDRef", char_id_map)
+    hdr_content = remap_attr(hdr_content, "paraPrIDRef", para_id_map)
+
+    # Write updated header
+    header_path.write_text(hdr_content, encoding="utf-8")
+
+    # Remap IDs in all section XMLs
+    for sf in section_files:
+        content = sf.read_text(encoding="utf-8")
+        original = content
+        content = remap_attr(content, "charPrIDRef", char_id_map)
+        content = remap_attr(content, "paraPrIDRef", para_id_map)
+        if content != original:
+            sf.write_text(content, encoding="utf-8")
 
 
 # ============================================================================
@@ -1116,6 +1271,9 @@ def generate_hwpx(config, output_path, template_path=None):
         hdr = header_path.read_text(encoding="utf-8")
         hdr = re.sub(r'secCnt="\d+"', f'secCnt="{total_sections}"', hdr)
         header_path.write_text(hdr, encoding="utf-8")
+
+        # Trim unused styles from header.xml and remap IDs in sections
+        trim_unused_styles(contents_dir)
 
         # Build HWPX ZIP
         output_path.parent.mkdir(parents=True, exist_ok=True)
