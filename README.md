@@ -169,16 +169,29 @@ HWPX-CLAUDE-SKILL/
 
 ## 커스터마이징
 
-### 사용자 정의 템플릿 사용
+### 템플릿 교체 방법
 
-`assets/template.hwpx`를 한컴오피스에서 만든 자신만의 HWPX 파일로 교체할 수 있습니다. 스크립트가 사용자 템플릿의 `header.xml`을 모든 스타일 정의에 사용하고 이미지/로고를 복사합니다.
+기본 제공되는 이노베이션아카데미 표준 보고서 템플릿 대신 자신만의 템플릿을 사용할 수 있습니다.
 
-```bash
-python scripts/generate_hwpx.py \
-  --output output.hwpx \
-  --config config.json \
-  --template /path/to/your/template.hwpx
-```
+1. **GitHub에서 ZIP 파일 다운로드**
+   - [HWPX-CLAUDE-SKILL GitHub 저장소](https://github.com/Steven-A3/HWPX-CLAUDE-SKILL)에서 녹색 **"Code"** 버튼 → **"Download ZIP"** 을 클릭하여 다운로드합니다.
+
+2. **ZIP 파일 압축 해제**
+   - 다운로드한 `HWPX-CLAUDE-SKILL-main.zip` 파일의 압축을 풀어줍니다.
+
+3. **템플릿 파일 교체**
+   - 한컴오피스(한글)에서 원하는 서식의 문서를 작성하고 **HWPX 형식으로 저장**합니다.
+     (파일 → 다른 이름으로 저장 → HWPX 선택)
+   - 압축 해제된 폴더 안의 `assets/template.hwpx` 파일을 새로 만든 HWPX 파일로 교체합니다.
+   - 파일명은 반드시 `template.hwpx`로 유지해야 합니다.
+
+4. **다시 ZIP으로 압축**
+   - 템플릿을 교체한 폴더 전체를 다시 ZIP 파일로 압축합니다.
+
+5. **Claude Desktop에서 스킬 재등록**
+   - Claude Desktop 앱의 **설정(Settings)** → **스킬(Skills)** 메뉴에서 기존에 등록된 HWPX 스킬을 제거합니다.
+   - **"Add Skill"** 또는 **"스킬 추가"** 버튼을 클릭하여 새로 압축한 ZIP 파일을 등록합니다.
+   - 이후 문서를 생성하면 새 템플릿의 스타일(글꼴, 테두리, 로고 등)이 자동으로 적용됩니다.
 
 ### 새로운 콘텐츠 유형 추가
 
