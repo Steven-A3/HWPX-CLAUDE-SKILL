@@ -1,0 +1,24 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "HWPX Claude Skill"
+abstract: "A Claude Skill that generates properly formatted HWPX (한글/Hangul) documents for Hancom Office, supporting Korean government-style reports with formatting, tables, headers, and cover pages."
+authors:
+  - alias: "Steven-A3"
+repository-code: "https://github.com/Steven-A3/HWPX-CLAUDE-SKILL"
+license: GPL-3.0
+keywords:
+  - hwpx
+  - hangul
+  - hancom
+  - korean-document
+  - hwp
+  - claude-skill
+  - document-generator
+  - owpml
+  - korean-government-report
+  - report-generator
+  - hancom-office
+  - 한글
+  - 한컴오피스
+  - 보고서
