@@ -1,71 +1,84 @@
 # HWPX Claude Skill
 
-> A Claude Skill for generating properly formatted HWPX (한글) documents — Korean government-style reports with full styling, tables, headers, and cover pages.
+> Claude가 올바른 서식의 HWPX(한글) 문서를 생성할 수 있게 해주는 Claude Skill입니다. 한국 정부 스타일 보고서의 서식, 표, 제목, 표지 등을 완벽하게 지원합니다.
 
-## What is this?
+## 이 프로젝트는?
 
-This is a [Claude Skill](https://docs.anthropic.com/) that enables Claude to generate native **HWPX** files (the modern format used by [Hancom Office / 한컴오피스](https://www.hancom.com/)). The generated files open correctly in Hancom Office with proper formatting preserved.
+이 프로젝트는 Claude가 네이티브 **HWPX** 파일([한컴오피스](https://www.hancom.com/)의 최신 문서 형식)을 생성할 수 있게 해주는 [Claude Skill](https://docs.anthropic.com/)입니다. 생성된 파일은 한컴오피스에서 올바른 서식이 유지된 상태로 정상적으로 열립니다.
 
-### Key Features
+### 주요 기능
 
-- **Template-based generation**: Uses a real HWPX template to ensure Hancom Office compatibility
-- **Full formatting support**: Gradient title bars, hierarchical markers (□/ㅇ/-/*), data tables, appendix sections
-- **이노베이션아카데미 standard report template**: Based on the official report format
-- **JSON-driven content**: Define your document content as simple JSON
-- **Cover page**: Optional auto-generated cover page with logo and organization branding
+- **템플릿 기반 생성**: 실제 HWPX 템플릿을 사용하여 한컴오피스 호환성 보장
+- **완전한 서식 지원**: 그라데이션 제목바, 계층형 마커(□/ㅇ/-/*), 데이터 표, 부록 섹션
+- **이노베이션아카데미 표준 보고서 템플릿**: 공식 보고서 양식 기반
+- **JSON 기반 콘텐츠**: 간단한 JSON으로 문서 내용을 정의
+- **표지**: 로고와 조직 브랜딩이 포함된 자동 생성 표지 (선택 사항)
 
-## HWPX Format
+## HWPX 형식
 
-HWPX is a ZIP+XML document format based on the **OWPML** standard (KS X 6101). It's the successor to the legacy HWP binary format and is the native format of Hancom Office (한글), the dominant word processor in Korean government and business.
+HWPX는 **OWPML** 표준(KS X 6101)을 기반으로 한 ZIP+XML 문서 형식입니다. 레거시 HWP 바이너리 형식의 후속이며, 한국 정부 및 기업에서 주로 사용되는 워드프로세서인 한컴오피스(한글)의 네이티브 형식입니다.
 
-### Why is this hard?
+### 왜 어려운가?
 
-Unlike DOCX (which has extensive libraries like `python-docx`), HWPX has virtually no open-source tooling. Creating valid HWPX files requires:
+DOCX와 달리(DOCX에는 `python-docx` 같은 풍부한 라이브러리가 있음), HWPX는 오픈소스 도구가 거의 없습니다. 유효한 HWPX 파일을 생성하려면 다음이 필요합니다:
 
-1. Correct ZIP structure with `mimetype` as the first STORED entry
-2. Complex `header.xml` with font faces, character properties, paragraph properties, border fills, and styles
-3. Section XML with precise namespace usage (`hs:sec`, `hp:p`, `hp:run`, `hp:tbl`, etc.)
-4. Correct `linesegarray` elements after every paragraph
-5. Style ID references that must match definitions in `header.xml`
+1. `mimetype`이 첫 번째 STORED 항목인 올바른 ZIP 구조
+2. 글꼴, 문자 속성, 문단 속성, 테두리 채움, 스타일이 포함된 복잡한 `header.xml`
+3. 정확한 네임스페이스 사용(`hs:sec`, `hp:p`, `hp:run`, `hp:tbl` 등)이 포함된 섹션 XML
+4. 모든 문단 뒤에 올바른 `linesegarray` 요소
+5. `header.xml`의 정의와 일치해야 하는 스타일 ID 참조
 
-This skill solves these challenges by reverse-engineering real HWPX files and using a template-based approach.
+이 스킬은 실제 HWPX 파일을 역공학하고 템플릿 기반 접근 방식을 사용하여 이러한 문제를 해결합니다.
 
-## Installation
+## 설치 방법
 
-### As a Claude Skill (Claude Desktop / Cowork)
+### Claude Desktop에서 스킬 설치하기 (권장)
 
-Copy the entire repository to your Claude skills directory:
+1. **GitHub에서 ZIP 파일 다운로드**
+   - [HWPX-CLAUDE-SKILL GitHub 저장소](https://github.com/Steven-A3/HWPX-CLAUDE-SKILL)에 접속합니다.
+   - 녹색 **"Code"** 버튼을 클릭한 후 **"Download ZIP"** 을 선택합니다.
+   - ZIP 파일이 다운로드됩니다.
+
+2. **Claude Desktop 설정에서 스킬 추가**
+   - Claude Desktop 앱을 실행합니다.
+   - **설정(Settings)** 을 엽니다.
+   - **스킬(Skills)** 또는 **Custom Skills** 메뉴로 이동합니다.
+   - **"Add Skill"** 또는 **"스킬 추가"** 버튼을 클릭합니다.
+   - 다운로드한 ZIP 파일을 선택하여 추가합니다.
+   - 스킬이 정상적으로 등록되면 바로 사용할 수 있습니다.
+
+### Git Clone으로 설치하기
 
 ```bash
-# Clone the repository
+# 저장소 클론
 git clone https://github.com/Steven-A3/HWPX-CLAUDE-SKILL.git
 
-# Copy to your Claude skills directory
+# Claude 스킬 디렉토리에 복사
 cp -r HWPX-CLAUDE-SKILL ~/.claude/skills/hwpx
 ```
 
-### Standalone Python Usage
+### 독립 실행형 Python 사용
 
 ```bash
-# Clone and use directly
+# 클론 후 직접 사용
 git clone https://github.com/Steven-A3/HWPX-CLAUDE-SKILL.git
 cd HWPX-CLAUDE-SKILL
 
-# Generate a sample document
+# 샘플 문서 생성
 python scripts/generate_hwpx.py --output output.hwpx --config examples/sample_report.json
 ```
 
-## Usage
+## 사용 방법
 
-### With Claude
+### Claude에서 사용하기
 
-Simply ask Claude to create an HWPX document:
+Claude에게 HWPX 문서를 만들어 달라고 요청하면 됩니다:
 
 > "2026년 1분기 업무 추진현황 보고서를 한글 파일로 만들어 줘"
 
-The skill automatically triggers on keywords like `HWPX`, `한글`, `보고서`, `HWP`, `한컴`, etc.
+`HWPX`, `한글`, `보고서`, `HWP`, `한컴` 등의 키워드로 스킬이 자동으로 실행됩니다.
 
-### Programmatic (Python)
+### 프로그래밍 방식 (Python)
 
 ```python
 from scripts.generate_hwpx import generate_hwpx
@@ -102,63 +115,63 @@ generate_hwpx(config, "output.hwpx")
 python scripts/generate_hwpx.py \
   --output my_report.hwpx \
   --config my_config.json \
-  --template custom_template.hwpx  # optional: use your own template
+  --template custom_template.hwpx  # 선택사항: 사용자 정의 템플릿 사용
 ```
 
-## Content Types
+## 콘텐츠 유형
 
-| Type | Marker | Font | Size | Description |
-|------|--------|------|------|-------------|
-| `heading` | □ | HY헤드라인M | 15pt | Section heading (bold) |
-| `paragraph` | — | 휴먼명조 | 15pt | Body text |
-| `bullet` | ㅇ | 휴먼명조 | 15pt | First-level bullet |
-| `dash` | - | 휴먼명조 | 15pt | Second-level item (indented) |
-| `star` | * | 맑은고딕 | 13pt | Third-level detail (further indented) |
-| `table` | — | 맑은고딕 | 12pt | Data table with header row |
-| `note` | ▷ | — | 14pt | Reference/note text |
-| `empty` | — | — | — | Empty spacer line |
+| 유형 | 마커 | 글꼴 | 크기 | 설명 |
+|------|------|------|------|------|
+| `heading` | □ | HY헤드라인M | 15pt | 섹션 제목 (굵게) |
+| `paragraph` | — | 휴먼명조 | 15pt | 본문 텍스트 |
+| `bullet` | ㅇ | 휴먼명조 | 15pt | 1단계 글머리 기호 |
+| `dash` | - | 휴먼명조 | 15pt | 2단계 항목 (들여쓰기) |
+| `star` | * | 맑은고딕 | 13pt | 3단계 세부사항 (추가 들여쓰기) |
+| `table` | — | 맑은고딕 | 12pt | 머리글 행이 있는 데이터 표 |
+| `note` | ▷ | — | 14pt | 참조/비고 텍스트 |
+| `empty` | — | — | — | 빈 줄 (간격 조절용) |
 
-## Section Types
+## 섹션 유형
 
-- **`body`**: Standard report body with gradient title bar and hierarchical content
-- **`appendix`**: Appendix section with numbered tab (참고1, 참고2, etc.) and separate title
+- **`body`**: 그라데이션 제목바와 계층형 콘텐츠가 포함된 표준 보고서 본문
+- **`appendix`**: 번호가 매겨진 탭(참고1, 참고2 등)과 별도의 제목이 있는 부록 섹션
 
-## Project Structure
+## 프로젝트 구조
 
 ```
 HWPX-CLAUDE-SKILL/
-├── SKILL.md              # Claude Skill definition (trigger rules, format docs)
-├── README.md             # This file
-├── LICENSE               # MIT License
+├── SKILL.md              # Claude Skill 정의 (트리거 규칙, 형식 문서)
+├── README.md             # 이 파일
+├── LICENSE               # MIT 라이선스
 ├── .gitignore
 ├── assets/
-│   └── template.hwpx     # Base template (이노베이션아카데미 standard report)
+│   └── template.hwpx     # 기본 템플릿 (이노베이션아카데미 표준 보고서)
 ├── scripts/
-│   └── generate_hwpx.py  # Main generation script
+│   └── generate_hwpx.py  # 메인 생성 스크립트
 └── examples/
-    └── sample_report.json # Example configuration
+    └── sample_report.json # 예제 설정 파일
 ```
 
-## How It Works
+## 작동 원리
 
-1. **Template Extraction**: The bundled `template.hwpx` is extracted to a temp directory
-2. **Static Copy**: `header.xml`, `BinData/` (logos), `META-INF/`, `settings.xml`, `version.xml` are copied as-is from the template — this preserves all font/style/border definitions
-3. **Dynamic Generation**: Section XML files are generated based on your JSON config, referencing the correct `charPrIDRef` and `paraPrIDRef` IDs from the template's `header.xml`
-4. **Package Assembly**: Everything is zipped into a valid HWPX file with `mimetype` as the first STORED entry
+1. **템플릿 추출**: 번들된 `template.hwpx`를 임시 디렉토리로 추출
+2. **정적 복사**: `header.xml`, `BinData/`(로고), `META-INF/`, `settings.xml`, `version.xml`은 템플릿에서 그대로 복사 — 모든 글꼴/스타일/테두리 정의 보존
+3. **동적 생성**: JSON 설정에 따라 섹션 XML 파일 생성, 템플릿 `header.xml`의 올바른 `charPrIDRef` 및 `paraPrIDRef` ID 참조
+4. **패키지 조립**: `mimetype`이 첫 번째 STORED 항목인 유효한 HWPX 파일로 압축
 
-### Key Technical Details
+### 주요 기술 세부사항
 
-- **Namespace**: `hs:` for section root, `hp:` for paragraphs/runs/tables, `hh:` for header definitions, `hc:` for core elements
-- **mimetype**: Must be `application/hwp+zip` (STORED, not compressed, first ZIP entry)
-- **Table structure**: `hp:tbl` → `hp:tr` → `hp:tc` → `hp:subList` → `hp:p`
-- **Every paragraph** requires `hp:linesegarray` after all runs
-- **First paragraph** in each section must contain `hp:secPr` with page layout
+- **네임스페이스**: `hs:`는 섹션 루트, `hp:`는 문단/실행/표, `hh:`는 헤더 정의, `hc:`는 코어 요소
+- **mimetype**: `application/hwp+zip`이어야 함 (STORED, 비압축, 첫 번째 ZIP 항목)
+- **테이블 구조**: `hp:tbl` → `hp:tr` → `hp:tc` → `hp:subList` → `hp:p`
+- **모든 문단**에는 모든 run 뒤에 `hp:linesegarray` 필요
+- **각 섹션의 첫 번째 문단**에는 페이지 레이아웃이 포함된 `hp:secPr` 필요
 
-## Customization
+## 커스터마이징
 
-### Using Your Own Template
+### 사용자 정의 템플릿 사용
 
-You can replace `assets/template.hwpx` with your own HWPX file (created in Hancom Office). The script will use your template's `header.xml` for all style definitions and copy your images/logos.
+`assets/template.hwpx`를 한컴오피스에서 만든 자신만의 HWPX 파일로 교체할 수 있습니다. 스크립트가 사용자 템플릿의 `header.xml`을 모든 스타일 정의에 사용하고 이미지/로고를 복사합니다.
 
 ```bash
 python scripts/generate_hwpx.py \
@@ -167,39 +180,39 @@ python scripts/generate_hwpx.py \
   --template /path/to/your/template.hwpx
 ```
 
-### Adding New Content Types
+### 새로운 콘텐츠 유형 추가
 
-Edit `scripts/generate_hwpx.py` and add new cases to the `generate_content_item()` function. You'll need to reference valid `charPrIDRef` and `paraPrIDRef` IDs from your template's `header.xml`.
+`scripts/generate_hwpx.py`를 편집하고 `generate_content_item()` 함수에 새 케이스를 추가합니다. 템플릿의 `header.xml`에서 유효한 `charPrIDRef` 및 `paraPrIDRef` ID를 참조해야 합니다.
 
-## Requirements
+## 요구 사항
 
-- Python 3.7+
-- No external dependencies (uses only stdlib: `zipfile`, `json`, `xml`, `shutil`, `tempfile`)
+- Python 3.7 이상
+- 외부 의존성 없음 (표준 라이브러리만 사용: `zipfile`, `json`, `xml`, `shutil`, `tempfile`)
 
-## Background
+## 배경
 
-This skill was developed through reverse-engineering of the HWPX format:
+이 스킬은 HWPX 형식의 역공학을 통해 개발되었습니다:
 
-1. **Web research** on OWPML/KS X 6101 standard
-2. **Real file analysis**: Extracted and analyzed actual HWPX files to understand the XML structure
-3. **Trial and error**: Iterative testing with Hancom Office to validate generated files
-4. **Template approach**: Discovered that copying `header.xml` from a known-good file is far more reliable than generating it from scratch
+1. **웹 리서치**: OWPML/KS X 6101 표준 조사
+2. **실제 파일 분석**: 실제 HWPX 파일을 추출하고 분석하여 XML 구조 파악
+3. **시행착오**: 한컴오피스에서 생성된 파일의 유효성을 검증하는 반복 테스트
+4. **템플릿 접근**: 검증된 파일에서 `header.xml`을 복사하는 것이 처음부터 생성하는 것보다 훨씬 안정적이라는 것을 발견
 
-## License
+## 라이선스
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT 라이선스 — 자세한 내용은 [LICENSE](LICENSE)를 참조하세요.
 
-## Contributing
+## 기여하기
 
-Contributions welcome! Especially:
+기여를 환영합니다! 특히 다음 분야:
 
-- Additional content types (images, charts, footnotes)
-- More template styles
-- Better linesegarray calculation
-- Documentation improvements
-- Test cases
+- 추가 콘텐츠 유형 (이미지, 차트, 각주)
+- 더 많은 템플릿 스타일
+- 더 나은 linesegarray 계산
+- 문서 개선
+- 테스트 케이스
 
-## Acknowledgments
+## 감사의 글
 
-- [이노베이션아카데미](https://innovationacademy.kr/) for the standard report template
-- Built with [Claude](https://claude.ai/) by Anthropic
+- [이노베이션아카데미](https://innovationacademy.kr/) — 표준 보고서 템플릿 제공
+- [Claude](https://claude.ai/) (Anthropic) 기반으로 개발
