@@ -169,9 +169,32 @@ HWPX-CLAUDE-SKILL/
 
 ## 커스터마이징
 
-### 사용자 정의 템플릿 사용
+### 템플릿 교체 방법
 
-`assets/template.hwpx`를 한컴오피스에서 만든 자신만의 HWPX 파일로 교체할 수 있습니다. 스크립트가 사용자 템플릿의 `header.xml`을 모든 스타일 정의에 사용하고 이미지/로고를 복사합니다.
+기본 제공되는 이노베이션아카데미 표준 보고서 템플릿 대신 자신만의 템플릿을 사용할 수 있습니다. 두 가지 방법이 있습니다.
+
+#### 방법 1: 기본 템플릿 파일 교체 (영구 적용)
+
+기본 템플릿을 완전히 교체하려면 `assets/template.hwpx` 파일을 덮어씁니다.
+
+1. **한컴오피스(한글)에서 원하는 서식의 문서를 작성**합니다.
+   - 사용할 글꼴, 문단 스타일, 표지 레이아웃, 로고 이미지 등을 미리 설정합니다.
+2. **HWPX 형식으로 저장**합니다 (파일 → 다른 이름으로 저장 → HWPX 선택).
+3. **기본 템플릿을 교체**합니다:
+
+```bash
+# 기존 템플릿 백업
+cp assets/template.hwpx assets/template_backup.hwpx
+
+# 새 템플릿으로 교체
+cp /path/to/your/new_template.hwpx assets/template.hwpx
+```
+
+이후 문서를 생성하면 새 템플릿의 스타일(글꼴, 테두리, 로고 등)이 자동으로 적용됩니다.
+
+#### 방법 2: 생성 시 템플릿 지정 (일회성 사용)
+
+기본 템플릿은 유지하면서 특정 문서에만 다른 템플릿을 사용하려면 `--template` 옵션을 사용합니다.
 
 ```bash
 python scripts/generate_hwpx.py \
@@ -179,6 +202,12 @@ python scripts/generate_hwpx.py \
   --config config.json \
   --template /path/to/your/template.hwpx
 ```
+
+#### 템플릿 교체 시 참고사항
+
+- 템플릿의 `header.xml`에 정의된 글꼴, 문자 속성(`charPr`), 문단 속성(`paraPr`), 테두리 채움(`borderFill`) 등의 스타일 정의가 그대로 사용됩니다.
+- 템플릿에 포함된 `BinData/` 폴더의 이미지(로고 등)도 함께 복사됩니다.
+- 템플릿의 스타일 ID가 변경되면 생성 스크립트의 `charPrIDRef`, `paraPrIDRef` 참조 값도 맞춰 수정해야 할 수 있습니다.
 
 ### 새로운 콘텐츠 유형 추가
 
