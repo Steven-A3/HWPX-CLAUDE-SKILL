@@ -346,6 +346,250 @@ def discover_styles_from_header(header_xml_path):
 
 
 # ============================================================================
+# Template Skeleton Extraction & Injection (V4)
+# ============================================================================
+
+def extract_top_level_paragraphs(section_xml, count):
+    """Extract the first `count` top-level <hp:p>...</hp:p> from section XML.
+
+    Uses depth tracking to correctly skip nested <hp:p> inside <hp:subList>
+    within table cells.  Returns (paragraphs, section_header) where:
+      - paragraphs: list of raw XML strings for top-level paragraphs
+      - section_header: the '<?xml ...><hs:sec ...>' opening (including attrs)
+
+    Returns ([], "") on any parsing error so callers can fall back.
+    """
+    try:
+        # Locate <hs:sec ...> opening tag
+        sec_idx = section_xml.index('<hs:sec')
+        # Find the closing '>' of the <hs:sec ...> tag
+        sec_close = section_xml.index('>', sec_idx) + 1
+        section_header = section_xml[:sec_close]
+        body = section_xml[sec_close:]
+
+        paragraphs = []
+        pos = 0
+        open_tag = '<hp:p'
+        close_tag = '</hp:p>'
+
+        for _ in range(count):
+            # Find the start of the next top-level <hp:p
+            start = body.index(open_tag, pos)
+            depth = 0
+            i = start
+            end = -1
+
+            while i < len(body):
+                # Check for opening <hp:p (not <hp:pic, <hp:pageBreak, etc.)
+                if body[i:i + len(open_tag)] == open_tag:
+                    # Verify it's actually <hp:p followed by space or >
+                    next_char_idx = i + len(open_tag)
+                    if next_char_idx < len(body) and body[next_char_idx] in (' ', '>', '/'):
+                        depth += 1
+                    i += len(open_tag)
+                    continue
+                # Check for closing </hp:p>
+                if body[i:i + len(close_tag)] == close_tag:
+                    depth -= 1
+                    if depth == 0:
+                        end = i + len(close_tag)
+                        break
+                    i += len(close_tag)
+                    continue
+                i += 1
+
+            if end == -1:
+                return [], ""  # Parsing failed
+            paragraphs.append(body[start:end])
+            pos = end
+
+        return paragraphs, section_header
+    except (ValueError, IndexError):
+        return [], ""
+
+
+def parse_last_lineseg(paragraph_xml):
+    """Parse the last top-level <hp:lineseg> in a paragraph for layout values.
+
+    Looks for lineseg entries that are direct children of the paragraph's
+    <hp:linesegarray>, not nested ones inside table cells.
+
+    Returns dict with vertpos, vertsize, textheight, baseline, spacing.
+    Returns None if not found.
+    """
+    # Find all lineseg elements (self-closing).  We want the LAST one
+    # in the paragraph — it belongs to the paragraph's own linesegarray
+    # (nested ones in table cells come earlier in the XML).
+    # Use attribute-order-independent matching so custom templates work.
+    pattern = re.compile(r'<hp:lineseg\s+([^/]*/)')
+    matches = list(pattern.finditer(paragraph_xml))
+    if not matches:
+        return None
+    attrs_str = matches[-1].group(1)
+    result = {}
+    for name in ('textpos', 'vertpos', 'vertsize', 'textheight', 'baseline', 'spacing'):
+        m = re.search(rf'{name}="(\d+)"', attrs_str)
+        if m:
+            result[name] = int(m.group(1))
+        else:
+            return None  # required attribute missing
+    return result
+
+
+def seed_vpt_from_skeleton(skeleton_paragraphs):
+    """Create a VertPosTracker pre-seeded from skeleton paragraph linesegs.
+
+    Reads actual vertpos/vertsize/spacing from each skeleton paragraph's
+    lineseg so the tracker starts at the correct position for appending
+    dynamic content paragraphs.
+    """
+    vpt = VertPosTracker()
+    for para_xml in skeleton_paragraphs:
+        ls = parse_last_lineseg(para_xml)
+        if ls:
+            vpt.next(ls['vertsize'], ls['spacing'])
+        else:
+            # Fallback: use a reasonable default
+            vpt.next(1500, 900)
+    return vpt
+
+
+def inject_body_title(p0_xml, title_text):
+    """Replace the title text in the body section skeleton P0.
+
+    Finds the <hp:tc> with borderFillIDRef="9" (title cell) and replaces
+    ALL <hp:t> content within that cell's subList with the new title.
+
+    Returns modified XML, or None if injection fails.
+    """
+    # Find the title cell scope: from borderFillIDRef="9" to the closing </hp:tc>
+    pattern = re.compile(
+        r'(borderFillIDRef="9".*?</hp:tc>)',
+        re.DOTALL
+    )
+    m = pattern.search(p0_xml)
+    if not m:
+        return None
+
+    cell_xml = m.group(1)
+    original_cell = cell_xml
+
+    # Replace all <hp:t>...</hp:t> within this cell
+    # First occurrence gets the title, subsequent ones get empty
+    replaced_count = [0]
+
+    def replacer(match):
+        replaced_count[0] += 1
+        if replaced_count[0] == 1:
+            return f'<hp:t>{xml_escape(title_text)}</hp:t>'
+        return '<hp:t></hp:t>'
+
+    new_cell = re.sub(r'<hp:t>[^<]*</hp:t>', replacer, cell_xml)
+
+    if replaced_count[0] == 0:
+        return None  # No <hp:t> found - trigger fallback
+
+    return p0_xml[:m.start()] + new_cell + p0_xml[m.end():]
+
+
+def inject_body_date(p1_xml, date_str, department):
+    """Replace date and department in body section skeleton P1.
+
+    Uses charPrIDRef anchoring: "50" for date runs, "58" for department.
+    Returns modified XML, or None if no replacements occurred.
+    """
+    result = p1_xml
+    replaced = False
+
+    if date_str:
+        # Format: ('date, department) — replace first charPrIDRef="50" run's text
+        new_result, n = re.subn(
+            r'(charPrIDRef="50"[^>]*><hp:t>)[^<]*(</hp:t>)',
+            lambda m: m.group(1) + xml_escape(f"('{date_str}, ") + m.group(2),
+            result, count=1
+        )
+        if n > 0:
+            result = new_result
+            replaced = True
+
+    if department:
+        # Replace charPrIDRef="58" run's text with department
+        new_result, n = re.subn(
+            r'(charPrIDRef="58"[^>]*><hp:t>)[^<]*(</hp:t>)',
+            lambda m: m.group(1) + xml_escape(department) + m.group(2),
+            result, count=1
+        )
+        if n > 0:
+            result = new_result
+            replaced = True
+
+    if date_str or department:
+        # Replace the trailing ")" run (last charPrIDRef="50" run)
+        # Find all charPrIDRef="50" runs and replace the last one's text
+        runs_50 = list(re.finditer(r'(charPrIDRef="50"[^>]*><hp:t>)[^<]*(</hp:t>)', result))
+        if len(runs_50) >= 2:
+            last = runs_50[-1]
+            result = result[:last.start()] + last.group(1) + xml_escape(")") + last.group(2) + result[last.end():]
+            replaced = True
+
+    if not replaced and (date_str or department):
+        return None  # Structural anchors not found
+
+    return result
+
+
+def inject_appendix_labels(p0_xml, tab_label, title_text):
+    """Replace tab label and title in appendix skeleton P0.
+
+    Tab label: in <hp:tc> with borderFillIDRef="17"
+    Title: in <hp:tc> with borderFillIDRef="11"
+
+    Returns modified XML, or None if injection fails.
+    """
+    result = p0_xml
+    injected = False
+
+    # --- Tab label (borderFillIDRef="17") ---
+    bf17_pattern = re.compile(r'(borderFillIDRef="17".*?</hp:tc>)', re.DOTALL)
+    m17 = bf17_pattern.search(result)
+    if m17:
+        cell = m17.group(1)
+        new_cell, n = re.subn(
+            r'<hp:t>[^<]*</hp:t>',
+            f'<hp:t>{xml_escape(tab_label)}</hp:t>',
+            cell, count=1
+        )
+        if n > 0:
+            result = result[:m17.start()] + new_cell + result[m17.end():]
+            injected = True
+
+    # --- Title (borderFillIDRef="11") ---
+    bf11_pattern = re.compile(r'(borderFillIDRef="11".*?</hp:tc>)', re.DOTALL)
+    m11 = bf11_pattern.search(result)
+    if m11:
+        cell = m11.group(1)
+        replaced_count = [0]
+
+        def replacer(match):
+            replaced_count[0] += 1
+            if replaced_count[0] == 1:
+                return f'<hp:t> </hp:t>'  # leading space
+            elif replaced_count[0] == 2:
+                return f'<hp:t>{xml_escape(title_text)}</hp:t>'
+            return '<hp:t></hp:t>'
+
+        new_cell = re.sub(r'<hp:t>[^<]*</hp:t>', replacer, cell)
+        if replaced_count[0] > 0:
+            result = result[:m11.start()] + new_cell + result[m11.end():]
+            injected = True
+
+    if not injected:
+        return None
+
+    return result
+
+
+# ============================================================================
 # XML Building Helpers
 # ============================================================================
 
@@ -778,17 +1022,54 @@ def generate_content_item(item, sm, vpt):
 # Section Generators
 # ============================================================================
 
-def generate_body_section_xml(section_config, sm, outline_ref="2"):
-    """Generate a body section with title bar and content."""
+def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref="2"):
+    """Generate a body section with title bar and content.
+
+    When template_dir is provided, uses the template's section1.xml as the
+    structural skeleton (title bar, date line, spacer) and appends dynamic
+    content.  Falls back to fully-generated XML if template is unavailable
+    or injection fails.
+    """
     title = section_config.get("title_bar", "보고서 제목")
     content_items = section_config.get("content", [])
     date_text = section_config.get("date", "")
     department = section_config.get("department", "")
 
+    # --- Template path: use skeleton from template section1.xml ---
+    if template_dir:
+        section1_path = Path(template_dir) / "Contents" / "section1.xml"
+        if section1_path.exists():
+            try:
+                raw_xml = section1_path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                raw_xml = None
+            if raw_xml:
+                paras, sec_header = extract_top_level_paragraphs(raw_xml, 3)
+
+                if len(paras) >= 3:
+                    p0 = inject_body_title(paras[0], title)
+                    p1 = inject_body_date(paras[1], date_text, department)
+                    p2 = paras[2]  # spacer, used as-is
+
+                    if p0 is not None and p1 is not None:
+                        vpt = seed_vpt_from_skeleton([p0, p1, p2])
+
+                        content_xml = ""
+                        for item in content_items:
+                            if item.get("type") == "heading":
+                                ss = sm["spacer_small"]
+                                vp = vpt.next(ss[2], ss[5])
+                                content_xml += paragraph_xml(ss[1], "0", run_xml(ss[0]),
+                                    lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
+                                                baseline=ss[4], spacing=ss[5]))
+                            content_xml += generate_content_item(item, sm, vpt)
+
+                        return sec_header + p0 + p1 + p2 + content_xml + '</hs:sec>'
+
+    # --- Fallback: fully generated (original v3 behavior) ---
     vpt = VertPosTracker()
     paragraphs = ""
 
-    # First paragraph: secPr + colPr + title bar
     fp = sm["first_para"]
     vpt.next(fp[2], fp[5])
 
@@ -805,7 +1086,6 @@ def generate_body_section_xml(section_config, sm, outline_ref="2"):
         f'</hp:p>')
     paragraphs += first_para
 
-    # Date/department line
     if date_text and department:
         dl = sm["date_line"]
         date_full_text = f"('{date_text}, {department})"
@@ -819,14 +1099,12 @@ def generate_body_section_xml(section_config, sm, outline_ref="2"):
                                                  baseline=dl[4], spacing=dl[5],
                                                  num_lines=nlines, full_text=date_full_text))
 
-    # Empty spacer
     sp = sm["spacer_medium"]
     vp = vpt.next(sp[2], sp[5])
     paragraphs += paragraph_xml(sp[1], "0", run_xml(sp[0]),
                                  lineseg_xml(vertpos=vp, vertsize=sp[2], textheight=sp[3],
                                              baseline=sp[4], spacing=sp[5]))
 
-    # Content items
     for item in content_items:
         if item.get("type") == "heading":
             ss = sm["spacer_small"]
@@ -839,16 +1117,50 @@ def generate_body_section_xml(section_config, sm, outline_ref="2"):
     return f'<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hs:sec {NS_DECL}>{paragraphs}</hs:sec>'
 
 
-def generate_appendix_section_xml(section_config, sm, outline_ref="2"):
-    """Generate an appendix section with tab-style title bar."""
+def generate_appendix_section_xml(section_config, sm, template_dir=None, outline_ref="2"):
+    """Generate an appendix section with tab-style title bar.
+
+    When template_dir is provided, uses the template's section2.xml as the
+    structural skeleton.  Falls back to fully-generated XML if unavailable.
+    """
     tab_label = section_config.get("title_bar", "참고1")
     appendix_title = section_config.get("appendix_title", "")
     content_items = section_config.get("content", [])
 
+    # --- Template path: use skeleton from template section2.xml ---
+    if template_dir:
+        section2_path = Path(template_dir) / "Contents" / "section2.xml"
+        if section2_path.exists():
+            try:
+                raw_xml = section2_path.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                raw_xml = None
+            if raw_xml:
+                paras, sec_header = extract_top_level_paragraphs(raw_xml, 2)
+
+                if len(paras) >= 2:
+                    p0 = inject_appendix_labels(paras[0], tab_label, appendix_title)
+                    p1 = paras[1]  # spacer, used as-is
+
+                    if p0 is not None:
+                        vpt = seed_vpt_from_skeleton([p0, p1])
+
+                        content_xml = ""
+                        for item in content_items:
+                            if item.get("type") == "heading":
+                                ss = sm["spacer_small"]
+                                vp = vpt.next(ss[2], ss[5])
+                                content_xml += paragraph_xml(ss[1], "0", run_xml(ss[0]),
+                                    lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
+                                                baseline=ss[4], spacing=ss[5]))
+                            content_xml += generate_content_item(item, sm, vpt)
+
+                        return sec_header + p0 + p1 + content_xml + '</hs:sec>'
+
+    # --- Fallback: fully generated (original v3 behavior) ---
     vpt = VertPosTracker()
     paragraphs = ""
 
-    # First paragraph: secPr + appendix bar
     af = sm["appendix_first"]
     vpt.next(af[2], af[5])
 
@@ -864,14 +1176,12 @@ def generate_appendix_section_xml(section_config, sm, outline_ref="2"):
         f'</hp:p>')
     paragraphs += first_para
 
-    # Empty spacer
     asp = sm["appendix_spacer"]
     vp = vpt.next(asp[2], asp[5])
     paragraphs += paragraph_xml(asp[1], "15", run_xml(asp[0]),
                                  lineseg_xml(vertpos=vp, vertsize=asp[2], textheight=asp[3],
                                              baseline=asp[4], spacing=asp[5]))
 
-    # Content
     for item in content_items:
         if item.get("type") == "heading":
             ss = sm["spacer_small"]
@@ -1222,17 +1532,18 @@ def generate_hwpx(config, output_path, template_path=None):
                 section_files.append("section0.xml")
 
         # Content sections
+        template_dir = tmpdir / "template"
         section_idx = 1 if include_cover else 0
         for sec_config in user_sections:
             sec_type = sec_config.get("type", "body")
             if sec_type == "body":
                 sec_config.setdefault("date", config.get("date", ""))
                 sec_config.setdefault("department", config.get("department", ""))
-                xml_content = generate_body_section_xml(sec_config, sm)
+                xml_content = generate_body_section_xml(sec_config, sm, template_dir=template_dir)
             elif sec_type == "appendix":
-                xml_content = generate_appendix_section_xml(sec_config, sm)
+                xml_content = generate_appendix_section_xml(sec_config, sm, template_dir=template_dir)
             else:
-                xml_content = generate_body_section_xml(sec_config, sm)
+                xml_content = generate_body_section_xml(sec_config, sm, template_dir=template_dir)
 
             section_file = f"section{section_idx}.xml"
             (contents_dir / section_file).write_text(xml_content, encoding="utf-8")
@@ -1240,7 +1551,7 @@ def generate_hwpx(config, output_path, template_path=None):
             section_idx += 1
 
         if not section_files:
-            xml_content = generate_body_section_xml({"title_bar": "보고서", "content": []}, sm)
+            xml_content = generate_body_section_xml({"title_bar": "보고서", "content": []}, sm, template_dir=template_dir)
             (contents_dir / "section0.xml").write_text(xml_content, encoding="utf-8")
             section_files.append("section0.xml")
 

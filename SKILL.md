@@ -14,11 +14,14 @@ HWPX is the modern XML-based format for Hancom Office (한글). It is a ZIP arch
 This skill uses a **template-based approach** for reliable HWPX generation:
 
 1. **header.xml** is copied verbatim from a known-good template (contains all font, style, border definitions)
-2. **Section XML** is generated dynamically using the template's style ID references
-3. **META-INF**, **version.xml**, **settings.xml** are copied from the template
-4. **BinData** (logos/images) are preserved from the template
+2. **Section skeletons** (title bar, date line, spacer) are extracted from the template's section1.xml and section2.xml, with dynamic text injected via structural pattern matching
+3. **Content paragraphs** (headings, bullets, tables, etc.) are generated dynamically and appended after the skeleton
+4. **META-INF**, **version.xml**, **settings.xml** are copied from the template
+5. **BinData** (logos/images) are preserved from the template
 
-This approach ensures Hancom Office compatibility because the complex header.xml (font definitions, charProperties, paraProperties, borderFills, styles) is never hand-crafted.
+This approach ensures Hancom Office compatibility because the complex header.xml and structural section XML (secPr, colPr, title bar tables) come directly from a Hancom-saved template. If the template sections cannot be parsed, the generator falls back to fully-generated XML.
+
+**Template customization**: Editing the template in Hancom Office (e.g., changing fonts, colors, or layout in the title bar) will propagate to all generated documents automatically.
 
 ## How to Use
 
