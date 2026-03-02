@@ -1,7 +1,7 @@
 # HWPX Claude Skill - 한글 문서 생성기 (Korean Document Generator)
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Python 3.7+](https://img.shields.io/badge/Python-3.7%2B-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![No Dependencies](https://img.shields.io/badge/Dependencies-None-green.svg)](#요구-사항--requirements)
 
 > Claude가 올바른 서식의 **HWPX(한글)** 문서를 생성할 수 있게 해주는 Claude Skill입니다. 한국 정부 및 공공기관 스타일 보고서의 서식, 표, 제목, 표지 등을 완벽하게 지원합니다.
@@ -19,6 +19,7 @@ This project is a [Claude Skill](https://docs.anthropic.com/) that enables Claud
 ### 주요 기능 / Key Features
 
 - **템플릿 기반 생성**: 실제 HWPX 템플릿을 사용하여 한컴오피스 호환성 보장
+- **동적 스타일 탐색**: 템플릿의 스타일 ID를 구조 분석으로 자동 인식 — 한컴오피스에서 템플릿을 수정해도 자동 대응
 - **완전한 서식 지원**: 그라데이션 제목바, 계층형 마커(□/ㅇ/-/*), 데이터 표, 부록 섹션
 - **이노베이션아카데미 표준 보고서 템플릿** 기본 포함
 - **JSON 기반 콘텐츠**: 간단한 JSON으로 문서 내용 정의
@@ -158,7 +159,8 @@ HWPX-CLAUDE-SKILL/
 ├── CITATION.cff          # 인용 메타데이터
 ├── .gitignore
 ├── assets/
-│   └── template.hwpx     # 기본 템플릿 (이노베이션아카데미 표준 보고서)
+│   ├── template.hwpx     # 기본 템플릿 (이노베이션아카데미 표준 보고서)
+│   └── default_styles.json # 자동 생성된 스타일 캐시 (템플릿 해시 포함)
 ├── scripts/
 │   └── generate_hwpx.py  # 메인 생성 스크립트 (Python)
 └── examples/
@@ -168,9 +170,23 @@ HWPX-CLAUDE-SKILL/
 ## 작동 원리 / How It Works
 
 1. **템플릿 추출**: 번들된 `template.hwpx`를 임시 디렉토리로 추출
-2. **정적 복사**: `header.xml`, `BinData/`(로고), `META-INF/`, `settings.xml`, `version.xml`은 템플릿에서 그대로 복사 — 모든 글꼴/스타일/테두리 정의 보존
-3. **동적 생성**: JSON 설정에 따라 섹션 XML 파일 생성, 템플릿 `header.xml`의 올바른 `charPrIDRef` 및 `paraPrIDRef` ID 참조
-4. **패키지 조립**: `mimetype`이 첫 번째 STORED 항목인 유효한 HWPX 파일로 압축
+2. **스타일 탐색**: 템플릿의 SHA-256 해시를 확인하여 캐시된 스타일 맵을 로드하거나, 변경 시 구조 분석을 통해 스타일 맵을 자동 재구축
+3. **스켈레톤 추출**: 템플릿 섹션에서 제목바, 날짜선, 부록 헤더 등의 골격 구조를 추출하고, 텍스트만 교체하여 원본 서식 완벽 보존
+4. **동적 생성**: JSON 설정에 따라 콘텐츠 문단을 생성, 탐색된 스타일 ID로 올바른 서식 참조
+5. **스타일 최적화**: 사용되지 않는 스타일을 제거하고 ID를 재매핑하여 파일 크기 최적화
+6. **패키지 조립**: `mimetype`이 첫 번째 STORED 항목인 유효한 HWPX 파일로 압축
+
+### 동적 스타일 탐색 시스템 / Dynamic Style Discovery
+
+한컴오피스에서 템플릿을 수정하면 `charPrIDRef`, `paraPrIDRef`, `borderFillIDRef` 등의 스타일 ID가 재배정됩니다. 이 시스템은 텍스트 내용이 아닌 **구조적 마커**를 사용하여 템플릿 변경에 자동 대응합니다:
+
+- **`<hp:colPr>`**: 페이지 레이아웃이 포함된 첫 번째 문단 (제목바) 식별
+- **paraPr RIGHT 정렬**: 날짜선 문단 식별 (paraPr 카탈로그 조회)
+- **`styleIDRef="15"`**: 제목(heading) 문단 식별
+- **charPr face name**: 글꼴 이름(예: "헤드라인")으로 역할 분류
+- **테이블 셀 위치**: `rowAddr`/`colAddr`로 제목바·부록 셀 식별 (borderFillIDRef에 의존하지 않음)
+
+탐색 결과는 `assets/default_styles.json`에 템플릿 해시와 함께 캐시됩니다. 템플릿이 변경되면 다음 실행 시 자동으로 재구축됩니다.
 
 ### 주요 기술 세부사항 / Technical Details
 
@@ -186,14 +202,15 @@ HWPX-CLAUDE-SKILL/
 
 1. 한컴오피스(한글)에서 원하는 서식의 문서를 작성하고 **HWPX 형식으로 저장**합니다 (파일 → 다른 이름으로 저장 → HWPX 선택)
 2. `assets/template.hwpx` 파일을 새로 만든 HWPX 파일로 교체합니다 (파일명은 반드시 `template.hwpx`로 유지)
-3. Claude Desktop에서 스킬을 재등록합니다
+3. 다음 실행 시 스타일 맵이 자동으로 재구축됩니다 (`assets/default_styles.json`이 업데이트됨)
+4. CLI에서 `--template` 옵션으로 별도 템플릿 지정도 가능합니다
 
-스타일 자동 탐색 기능이 포함되어 있어 유효한 HWPX 템플릿이라면 자동으로 스타일을 인식합니다.
+동적 스타일 탐색 시스템이 구조적 마커를 분석하여 새 템플릿의 스타일 ID를 자동으로 인식합니다. 인식에 실패한 역할은 기본값으로 대체됩니다.
 
 ## 요구 사항 / Requirements
 
-- **Python 3.7** 이상
-- **외부 의존성 없음** — 표준 라이브러리만 사용 (`zipfile`, `json`, `xml`, `shutil`, `tempfile`)
+- **Python 3.9** 이상
+- **외부 의존성 없음** — 표준 라이브러리만 사용 (`zipfile`, `json`, `xml`, `hashlib`, `shutil`, `tempfile`)
 
 ## 배경 / Background
 
@@ -203,6 +220,7 @@ HWPX-CLAUDE-SKILL/
 2. **실제 파일 분석**: 실제 HWPX 파일을 추출하고 분석하여 XML 구조 파악
 3. **시행착오**: 한컴오피스에서 생성된 파일의 유효성을 검증하는 반복 테스트
 4. **템플릿 접근**: 검증된 파일에서 `header.xml`을 복사하는 것이 처음부터 생성하는 것보다 훨씬 안정적이라는 것을 발견
+5. **구조적 탐색**: 텍스트 매칭 대신 XML 구조 마커(colPr, cellAddr, paraPr 정렬, charPr 글꼴명)를 사용하여 템플릿 변경에 강건한 스타일 탐색 구현
 
 ## 라이선스 / License
 
@@ -213,9 +231,8 @@ HWPX-CLAUDE-SKILL/
 기여를 환영합니다! 특히 다음 분야:
 
 - 추가 콘텐츠 유형 (이미지, 차트, 각주)
-- 더 많은 템플릿 스타일
-- 더 나은 linesegarray 계산
-- 문서 개선
+- 다양한 보고서 템플릿
+- linesegarray 계산 정밀도 향상
 - 테스트 케이스
 
 ## 감사의 글 / Acknowledgments

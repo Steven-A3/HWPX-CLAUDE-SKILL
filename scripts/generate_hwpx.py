@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -261,10 +262,58 @@ DEFAULT_STYLE_MAP = {
 }
 
 
-def discover_styles_from_header(header_xml_path):
-    """
-    Parse header.xml to discover available style IDs.
-    Returns a style map compatible with DEFAULT_STYLE_MAP, or None on failure.
+def compute_template_hash(template_path):
+    """Compute SHA-256 hash of the template .hwpx file."""
+    h = hashlib.sha256()
+    with open(template_path, 'rb') as f:
+        for chunk in iter(lambda: f.read(8192), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def load_cached_style_map(cache_path, expected_hash):
+    """Load style map from JSON cache if hash matches. Returns dict or None."""
+    try:
+        cache_path = Path(cache_path)
+        if not cache_path.exists():
+            return None
+        data = json.loads(cache_path.read_text(encoding='utf-8'))
+        if data.get('template_hash') != expected_hash:
+            return None
+        sm = data.get('style_map', {})
+        # Convert list values back to tuples for style entries
+        for key, val in sm.items():
+            if isinstance(val, list):
+                sm[key] = tuple(val)
+        return sm
+    except Exception:
+        return None
+
+
+def save_style_map_cache(cache_path, hash_val, style_map):
+    """Write style map + hash to JSON cache."""
+    try:
+        cache_path = Path(cache_path)
+        # Convert tuples to lists for JSON serialization
+        sm_json = {}
+        for key, val in style_map.items():
+            sm_json[key] = list(val) if isinstance(val, tuple) else val
+        data = {
+            'template_hash': hash_val,
+            'style_map': sm_json,
+        }
+        cache_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    except Exception as e:
+        print(f"Warning: Could not save style map cache: {e}")
+
+
+def _parse_header_catalogs(header_xml_path):
+    """Parse header.xml to build charPr and paraPr catalogs.
+
+    Returns (char_catalog, para_catalog) where:
+      char_catalog: {id_str: {'height': int, 'face': str, 'bold': bool}}
+      para_catalog: {id_str: {'align': str, 'line_spacing_type': str, 'line_spacing_value': str}}
+    Returns (None, None) on failure.
     """
     try:
         ns = {
@@ -294,75 +343,39 @@ def discover_styles_from_header(header_xml_path):
             hangul_face = font_map.get(('HANGUL', hangul_ref), '')
             char_catalog[cpid] = {
                 'height': height,
-                'hangul_font': hangul_ref,
-                'hangul_face': hangul_face,
+                'face': hangul_face,
                 'bold': has_bold,
             }
 
-        def find_char_pr(face_substr, height, bold=None):
-            candidates = []
-            for cpid, info in char_catalog.items():
-                if face_substr and face_substr not in info['hangul_face']:
-                    continue
-                if bold is not None and info['bold'] != bold:
-                    continue
-                dist = abs(info['height'] - height)
-                candidates.append((dist, cpid, info['height']))
-            if not candidates:
-                return None
-            candidates.sort()
-            return (candidates[0][1], candidates[0][2])
+        # Build paraPr catalog
+        para_catalog = {}
+        for pp in root.findall('.//hh:paraPr', ns):
+            ppid = pp.get('id', '')
+            align_el = pp.find('hh:align', ns)
+            h_align = align_el.get('horizontal', 'JUSTIFY') if align_el is not None else 'JUSTIFY'
+            ls_el = pp.find('hh:lineSpacing', ns)
+            ls_type = ls_el.get('type', 'PERCENT') if ls_el is not None else 'PERCENT'
+            ls_value = ls_el.get('value', '160') if ls_el is not None else '160'
+            para_catalog[ppid] = {
+                'align': h_align,
+                'line_spacing_type': ls_type,
+                'line_spacing_value': ls_value,
+            }
 
-        style_map = dict(DEFAULT_STYLE_MAP)
-
-        hy_15 = find_char_pr('HY헤드라인', 1500)
-        hy_20 = find_char_pr('HY헤드라인', 2000)
-        hm_15 = find_char_pr('휴먼명조', 1500)
-        mg_13 = find_char_pr('맑은', 1300)
-        mg_12 = find_char_pr('맑은', 1200)
-
-        if hy_15:
-            style_map["heading_text"] = (hy_15[0], style_map["heading_text"][1],
-                                          hy_15[1], hy_15[1], int(hy_15[1]*0.85), int(hy_15[1]*0.6))
-        if hy_20:
-            style_map["title_bar_title"] = (hy_20[0], style_map["title_bar_title"][1],
-                                             hy_20[1], hy_20[1], int(hy_20[1]*0.85), int(hy_20[1]*0.9))
-        if hm_15:
-            for role in ("paragraph", "bullet", "dash"):
-                style_map[role] = (hm_15[0], style_map[role][1],
-                                    hm_15[1], hm_15[1], int(hm_15[1]*0.85), int(hm_15[1]*0.6))
-        if mg_13:
-            style_map["star"] = (mg_13[0], style_map["star"][1],
-                                  mg_13[1], mg_13[1], int(mg_13[1]*0.85), int(mg_13[1]*0.6))
-        if mg_12:
-            for role in ("table_header", "table_body"):
-                style_map[role] = (mg_12[0], style_map[role][1],
-                                    mg_12[1], mg_12[1], int(mg_12[1]*0.85), int(mg_12[1]*0.3))
-        return style_map
-
+        return char_catalog, para_catalog
     except Exception as e:
-        print(f"Warning: Could not auto-discover styles: {e}")
-        return None
+        print(f"Warning: Could not parse header.xml catalogs: {e}")
+        return None, None
 
 
-# ============================================================================
-# Template Skeleton Extraction & Injection (V4)
-# ============================================================================
+def _extract_all_top_level_paragraphs(section_xml):
+    """Extract ALL top-level paragraphs from section XML.
 
-def extract_top_level_paragraphs(section_xml, count):
-    """Extract the first `count` top-level <hp:p>...</hp:p> from section XML.
-
-    Uses depth tracking to correctly skip nested <hp:p> inside <hp:subList>
-    within table cells.  Returns (paragraphs, section_header) where:
-      - paragraphs: list of raw XML strings for top-level paragraphs
-      - section_header: the '<?xml ...><hs:sec ...>' opening (including attrs)
-
-    Returns ([], "") on any parsing error so callers can fall back.
+    Returns (paragraphs, section_header) where paragraphs is a list of
+    raw XML strings and section_header is the opening tag.
     """
     try:
-        # Locate <hs:sec ...> opening tag
         sec_idx = section_xml.index('<hs:sec')
-        # Find the closing '>' of the <hs:sec ...> tag
         sec_close = section_xml.index('>', sec_idx) + 1
         section_header = section_xml[:sec_close]
         body = section_xml[sec_close:]
@@ -372,23 +385,27 @@ def extract_top_level_paragraphs(section_xml, count):
         open_tag = '<hp:p'
         close_tag = '</hp:p>'
 
-        for _ in range(count):
-            # Find the start of the next top-level <hp:p
-            start = body.index(open_tag, pos)
+        while pos < len(body):
+            try:
+                start = body.index(open_tag, pos)
+            except ValueError:
+                break
+            # Verify it's <hp:p followed by space or >
+            next_char_idx = start + len(open_tag)
+            if next_char_idx < len(body) and body[next_char_idx] not in (' ', '>', '/'):
+                pos = next_char_idx
+                continue
+
             depth = 0
             i = start
             end = -1
-
             while i < len(body):
-                # Check for opening <hp:p (not <hp:pic, <hp:pageBreak, etc.)
                 if body[i:i + len(open_tag)] == open_tag:
-                    # Verify it's actually <hp:p followed by space or >
-                    next_char_idx = i + len(open_tag)
-                    if next_char_idx < len(body) and body[next_char_idx] in (' ', '>', '/'):
+                    nc = i + len(open_tag)
+                    if nc < len(body) and body[nc] in (' ', '>', '/'):
                         depth += 1
                     i += len(open_tag)
                     continue
-                # Check for closing </hp:p>
                 if body[i:i + len(close_tag)] == close_tag:
                     depth -= 1
                     if depth == 0:
@@ -399,7 +416,7 @@ def extract_top_level_paragraphs(section_xml, count):
                 i += 1
 
             if end == -1:
-                return [], ""  # Parsing failed
+                break
             paragraphs.append(body[start:end])
             pos = end
 
@@ -407,6 +424,476 @@ def extract_top_level_paragraphs(section_xml, count):
     except (ValueError, IndexError):
         return [], ""
 
+
+def _extract_para_attrs(para_xml):
+    """Extract key attributes from a paragraph XML string.
+
+    Returns dict with: paraPrIDRef, styleIDRef, charPrIDRefs (list),
+    has_colpr, has_tbl, has_text, vertsize, textheight, baseline, spacing.
+    """
+    pp_m = re.search(r'paraPrIDRef="(\d+)"', para_xml)
+    st_m = re.search(r'styleIDRef="(\d+)"', para_xml)
+    char_prs = re.findall(r'charPrIDRef="(\d+)"', para_xml)
+    has_colpr = '<hp:colPr' in para_xml
+    has_tbl = '<hp:tbl' in para_xml
+    texts = re.findall(r'<hp:t>([^<]+)</hp:t>', para_xml)
+    has_text = any(t.strip() for t in texts)
+
+    ls = parse_last_lineseg(para_xml)
+
+    return {
+        'paraPrIDRef': pp_m.group(1) if pp_m else '0',
+        'styleIDRef': st_m.group(1) if st_m else '0',
+        'charPrIDRefs': char_prs,
+        'has_colpr': has_colpr,
+        'has_tbl': has_tbl,
+        'has_text': has_text,
+        'vertsize': ls['vertsize'] if ls else 0,
+        'textheight': ls['textheight'] if ls else 0,
+        'baseline': ls['baseline'] if ls else 0,
+        'spacing': ls['spacing'] if ls else 0,
+    }
+
+
+def _extract_table_cells(para_xml):
+    """Extract table cell info from a paragraph containing <hp:tbl>.
+
+    Returns list of dicts with: rowAddr, colAddr, bf (borderFillIDRef),
+    charPrIDRefs, paraPrIDRefs.
+    """
+    cells = []
+    for tc_m in re.finditer(r'<hp:tc\b([^>]*)>(.*?)</hp:tc>', para_xml, re.DOTALL):
+        tc_attrs = tc_m.group(1)
+        tc_body = tc_m.group(2)
+        addr_m = re.search(r'<hp:cellAddr\s+colAddr="(\d+)"\s+rowAddr="(\d+)"', tc_body)
+        bf_m = re.search(r'borderFillIDRef="(\d+)"', tc_attrs)
+        char_prs = re.findall(r'charPrIDRef="(\d+)"', tc_body)
+        para_prs = re.findall(r'paraPrIDRef="(\d+)"', tc_body)
+        cells.append({
+            'rowAddr': int(addr_m.group(2)) if addr_m else -1,
+            'colAddr': int(addr_m.group(1)) if addr_m else -1,
+            'bf': bf_m.group(1) if bf_m else '1',
+            'charPrIDRefs': char_prs,
+            'paraPrIDRefs': para_prs,
+        })
+    return cells
+
+
+def _make_style_tuple(char_pr_id, para_pr_id, vertsize, textheight, baseline, spacing):
+    """Create a style map tuple entry."""
+    return (str(char_pr_id), str(para_pr_id), int(vertsize), int(textheight),
+            int(baseline), int(spacing))
+
+
+def build_style_map_from_template(template_dir):
+    """Build a complete style map by parsing the extracted template.
+
+    Uses structural markers (colPr, styleIDRef, table geometry, paraPr alignment)
+    and charPr catalog properties (font face, height) — never matches text content.
+
+    Returns a style map dict compatible with DEFAULT_STYLE_MAP, or None on failure.
+    """
+    template_dir = Path(template_dir)
+    header_path = template_dir / "Contents" / "header.xml"
+    section1_path = template_dir / "Contents" / "section1.xml"
+    section2_path = template_dir / "Contents" / "section2.xml"
+
+    if not header_path.exists() or not section1_path.exists():
+        return None
+
+    # Phase A: Parse header catalogs
+    char_catalog, para_catalog = _parse_header_catalogs(header_path)
+    if char_catalog is None:
+        return None
+
+    sm = dict(DEFAULT_STYLE_MAP)
+
+    try:
+        # Phase B: Parse section1.xml
+        s1_xml = section1_path.read_text(encoding='utf-8')
+        s1_paras, _ = _extract_all_top_level_paragraphs(s1_xml)
+        if not s1_paras:
+            return None
+
+        # Classify paragraphs by structural markers
+        first_para_idx = None
+        date_line_idx = None
+        spacer_medium_idx = None
+        heading_idx = None
+        table_wrapper_idx = None
+        table_caption_idx = None
+
+        para_attrs_list = [_extract_para_attrs(p) for p in s1_paras]
+
+        for i, attrs in enumerate(para_attrs_list):
+            if attrs['has_colpr'] and first_para_idx is None:
+                first_para_idx = i
+            elif attrs['styleIDRef'] == '15' and heading_idx is None:
+                heading_idx = i
+            elif attrs['has_tbl'] and not attrs['has_colpr'] and table_wrapper_idx is None:
+                table_wrapper_idx = i
+
+        # Find date_line: paraPr with RIGHT alignment, after first_para
+        if first_para_idx is not None:
+            for i, attrs in enumerate(para_attrs_list):
+                if i <= (first_para_idx or 0):
+                    continue
+                if heading_idx is not None and i >= heading_idx:
+                    break
+                pp_id = attrs['paraPrIDRef']
+                pp_info = para_catalog.get(pp_id, {})
+                if pp_info.get('align') == 'RIGHT':
+                    date_line_idx = i
+                    break
+
+        # Find spacer_medium: empty paragraph between date_line and heading
+        if date_line_idx is not None and heading_idx is not None:
+            for i in range(date_line_idx + 1, heading_idx):
+                attrs = para_attrs_list[i]
+                if not attrs['has_text'] and attrs['vertsize'] > 0:
+                    spacer_medium_idx = i
+                    break
+
+        # Find table_caption: paragraph just before table_wrapper
+        if table_wrapper_idx is not None and table_wrapper_idx > 0:
+            table_caption_idx = table_wrapper_idx - 1
+
+        # Phase C: Extract style tuples from classified paragraphs
+
+        # --- first_para ---
+        if first_para_idx is not None:
+            a = para_attrs_list[first_para_idx]
+            first_cp = a['charPrIDRefs'][-1] if a['charPrIDRefs'] else '0'
+            sm['first_para'] = _make_style_tuple(
+                first_cp, a['paraPrIDRef'], a['vertsize'], a['textheight'],
+                a['baseline'], a['spacing'])
+
+        # --- date_line and date_emphasis ---
+        if date_line_idx is not None:
+            a = para_attrs_list[date_line_idx]
+            runs = re.findall(r'charPrIDRef="(\d+)"', s1_paras[date_line_idx])
+            unique_cps = []
+            seen = set()
+            for cp in runs:
+                if cp not in seen:
+                    unique_cps.append(cp)
+                    seen.add(cp)
+            if len(unique_cps) >= 1:
+                sm['date_line'] = _make_style_tuple(
+                    unique_cps[0], a['paraPrIDRef'], a['vertsize'],
+                    a['textheight'], a['baseline'], a['spacing'])
+            if len(unique_cps) >= 2:
+                sm['date_emphasis'] = _make_style_tuple(
+                    unique_cps[1], a['paraPrIDRef'], a['vertsize'],
+                    a['textheight'], a['baseline'], a['spacing'])
+
+        # --- spacer_medium ---
+        if spacer_medium_idx is not None:
+            a = para_attrs_list[spacer_medium_idx]
+            sp_cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else '0'
+            sm['spacer_medium'] = _make_style_tuple(
+                sp_cp, a['paraPrIDRef'], a['vertsize'], a['textheight'],
+                a['baseline'], a['spacing'])
+
+        # --- heading ---
+        if heading_idx is not None:
+            a = para_attrs_list[heading_idx]
+            runs = a['charPrIDRefs']
+            # Identify heading runs by charPr face from catalog
+            heading_text_cp = None
+            heading_marker_cp = None
+            heading_tail_cp = None
+            heading_end_cp = None
+            for cp in runs:
+                info = char_catalog.get(cp, {})
+                face = info.get('face', '')
+                if '헤드라인' in face and heading_text_cp is None:
+                    heading_text_cp = cp
+                elif heading_marker_cp is None and cp != heading_text_cp:
+                    heading_marker_cp = cp
+            # Tail/end: last two unique charPrs that aren't heading_text
+            other_cps = [cp for cp in runs if cp != heading_text_cp]
+            if len(other_cps) >= 1:
+                heading_marker_cp = heading_marker_cp or other_cps[0]
+                heading_tail_cp = other_cps[0]
+            if len(other_cps) >= 2:
+                heading_end_cp = other_cps[-1]
+
+            if heading_text_cp:
+                sm['heading_text'] = _make_style_tuple(
+                    heading_text_cp, a['paraPrIDRef'], a['vertsize'],
+                    a['textheight'], a['baseline'], a['spacing'])
+            if heading_marker_cp:
+                sm['heading_marker'] = _make_style_tuple(
+                    heading_marker_cp, a['paraPrIDRef'], a['vertsize'],
+                    a['textheight'], a['baseline'], a['spacing'])
+            if heading_tail_cp:
+                sm['heading_tail'] = _make_style_tuple(
+                    heading_tail_cp, a['paraPrIDRef'], a['vertsize'],
+                    a['textheight'], a['baseline'], a['spacing'])
+            if heading_end_cp:
+                sm['heading_end'] = _make_style_tuple(
+                    heading_end_cp, a['paraPrIDRef'], a['vertsize'],
+                    a['textheight'], a['baseline'], a['spacing'])
+
+        # --- Content paragraphs: bullet, dash, star, note ---
+        # Identify by charPr height from catalog + document order
+        content_paras = []
+        start_idx = (heading_idx + 1) if heading_idx is not None else 3
+        note_found = False
+        for i in range(start_idx, len(para_attrs_list)):
+            a = para_attrs_list[i]
+            if a['has_tbl']:
+                continue
+            if a['styleIDRef'] == '15':
+                continue  # another heading
+            if not a['has_text']:
+                continue  # spacer
+            # Get primary charPr height from catalog
+            primary_cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else None
+            cp_info = char_catalog.get(primary_cp, {}) if primary_cp else {}
+            height = cp_info.get('height', 0)
+            content_paras.append((i, a, height, primary_cp))
+
+        # Group by (paraPrIDRef, primary_charPr) signature — first occurrence
+        seen_sigs = {}
+        for idx, a, height, primary_cp in content_paras:
+            sig = (a['paraPrIDRef'], primary_cp)
+            if sig not in seen_sigs:
+                seen_sigs[sig] = (idx, a, height, primary_cp)
+
+        # Assign roles by height ranking + order
+        tall_groups = []  # height >= 1500 (bullet, dash)
+        mid_groups = []   # height 1300-1499 (star, table_caption)
+        other_groups = [] # everything else (note)
+
+        for sig, (idx, a, height, primary_cp) in sorted(seen_sigs.items(), key=lambda x: x[1][0]):
+            if height >= 1500:
+                tall_groups.append((idx, a, height, primary_cp))
+            elif height >= 1300:
+                mid_groups.append((idx, a, height, primary_cp))
+            else:
+                other_groups.append((idx, a, height, primary_cp))
+
+        # First tall group → bullet/paragraph, second → dash
+        if len(tall_groups) >= 1:
+            idx, a, h, cp = tall_groups[0]
+            end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else cp
+            sm['bullet'] = _make_style_tuple(cp, a['paraPrIDRef'], a['vertsize'],
+                                              a['textheight'], a['baseline'], a['spacing'])
+            sm['bullet_end'] = _make_style_tuple(end_cp, a['paraPrIDRef'], a['vertsize'],
+                                                  a['textheight'], a['baseline'], a['spacing'])
+            sm['paragraph'] = sm['bullet']
+            sm['paragraph_end'] = sm['bullet_end']
+
+        if len(tall_groups) >= 2:
+            idx, a, h, cp = tall_groups[1]
+            end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else cp
+            sm['dash'] = _make_style_tuple(cp, a['paraPrIDRef'], a['vertsize'],
+                                            a['textheight'], a['baseline'], a['spacing'])
+            sm['dash_end'] = _make_style_tuple(end_cp, a['paraPrIDRef'], a['vertsize'],
+                                                a['textheight'], a['baseline'], a['spacing'])
+
+        # Mid groups → star
+        if mid_groups:
+            idx, a, h, cp = mid_groups[0]
+            end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else cp
+            sm['star'] = _make_style_tuple(cp, a['paraPrIDRef'], a['vertsize'],
+                                            a['textheight'], a['baseline'], a['spacing'])
+            sm['star_end'] = _make_style_tuple(end_cp, a['paraPrIDRef'], a['vertsize'],
+                                                a['textheight'], a['baseline'], a['spacing'])
+
+        # Note: paragraph after table_wrapper with text
+        if table_wrapper_idx is not None:
+            for i in range(table_wrapper_idx + 1, len(para_attrs_list)):
+                a = para_attrs_list[i]
+                if a['has_text'] and a['styleIDRef'] != '15':
+                    cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else '0'
+                    end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else cp
+                    sm['note'] = _make_style_tuple(cp, a['paraPrIDRef'], a['vertsize'],
+                                                    a['textheight'], a['baseline'], a['spacing'])
+                    break
+
+        # --- table_caption ---
+        if table_caption_idx is not None:
+            a = para_attrs_list[table_caption_idx]
+            cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else '0'
+            sm['table_caption'] = _make_style_tuple(
+                cp, a['paraPrIDRef'], a['vertsize'], a['textheight'],
+                a['baseline'], a['spacing'])
+
+        # --- table_wrapper ---
+        if table_wrapper_idx is not None:
+            a = para_attrs_list[table_wrapper_idx]
+            cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else '0'
+            sm['table_wrapper'] = _make_style_tuple(
+                cp, a['paraPrIDRef'], a['vertsize'], a['textheight'],
+                a['baseline'], a['spacing'])
+
+        # --- spacer_small: first empty paragraph after heading with small vertsize ---
+        if heading_idx is not None:
+            for i in range(heading_idx + 1, len(para_attrs_list)):
+                a = para_attrs_list[i]
+                if not a['has_text'] and 0 < a['vertsize'] <= 800:
+                    sp_cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else '0'
+                    sm['spacer_small'] = _make_style_tuple(
+                        sp_cp, a['paraPrIDRef'], a['vertsize'], a['textheight'],
+                        a['baseline'], a['spacing'])
+                    break
+
+        # Phase D: Extract borderFillIDRef from table cells
+
+        # Title bar table (first_para's 3-row 1-col table)
+        if first_para_idx is not None:
+            cells = _extract_table_cells(s1_paras[first_para_idx])
+            for cell in cells:
+                if cell['rowAddr'] == 0:
+                    sm['bf_gradient_top'] = cell['bf']
+                    if cell['charPrIDRefs']:
+                        sm['title_bar_top'] = _make_style_tuple(
+                            cell['charPrIDRefs'][0],
+                            cell['paraPrIDRefs'][0] if cell['paraPrIDRefs'] else '3',
+                            100, 100, 85, 60)
+                elif cell['rowAddr'] == 1:
+                    sm['bf_title_bg'] = cell['bf']
+                    # Title cell: find the charPr with largest height (title font)
+                    title_cp = None
+                    max_h = 0
+                    for cp in cell['charPrIDRefs']:
+                        info = char_catalog.get(cp, {})
+                        if info.get('height', 0) > max_h:
+                            max_h = info['height']
+                            title_cp = cp
+                    if title_cp:
+                        sm['title_bar_title'] = _make_style_tuple(
+                            title_cp,
+                            cell['paraPrIDRefs'][0] if cell['paraPrIDRefs'] else '15',
+                            max_h, max_h, int(max_h * 0.85), int(max_h * 0.9))
+                elif cell['rowAddr'] == 2:
+                    sm['bf_gradient_bot'] = cell['bf']
+                    if cell['charPrIDRefs']:
+                        sm['title_bar_bottom'] = _make_style_tuple(
+                            cell['charPrIDRefs'][0],
+                            cell['paraPrIDRefs'][0] if cell['paraPrIDRefs'] else '3',
+                            100, 100, 85, 60)
+
+        # Data table (table_wrapper's table)
+        if table_wrapper_idx is not None:
+            cells = _extract_table_cells(s1_paras[table_wrapper_idx])
+            header_bf = None
+            body_bf = None
+            header_cp = None
+            body_cp = None
+            header_pp = None
+            for cell in cells:
+                if cell['rowAddr'] == 0 and header_bf is None:
+                    header_bf = cell['bf']
+                    header_cp = cell['charPrIDRefs'][0] if cell['charPrIDRefs'] else None
+                    header_pp = cell['paraPrIDRefs'][0] if cell['paraPrIDRefs'] else None
+                elif cell['rowAddr'] >= 1 and body_bf is None:
+                    body_bf = cell['bf']
+                    body_cp = cell['charPrIDRefs'][0] if cell['charPrIDRefs'] else None
+            if header_bf:
+                sm['bf_table_header'] = header_bf
+            if body_bf:
+                sm['bf_table'] = body_bf
+            if header_cp and header_pp:
+                cp_info = char_catalog.get(header_cp, {})
+                h = cp_info.get('height', 1200)
+                sm['table_header'] = _make_style_tuple(header_cp, header_pp, h, h, int(h*0.85), 360)
+            if body_cp:
+                cp_info = char_catalog.get(body_cp, {})
+                h = cp_info.get('height', 1200)
+                pp = header_pp or '25'
+                sm['table_body'] = _make_style_tuple(body_cp, pp, h, h, int(h*0.85), 360)
+
+        # Phase E: Parse section2.xml for appendix roles
+        if section2_path.exists():
+            try:
+                s2_xml = section2_path.read_text(encoding='utf-8')
+                s2_paras, _ = _extract_all_top_level_paragraphs(s2_xml)
+                s2_attrs = [_extract_para_attrs(p) for p in s2_paras]
+
+                # Find appendix first_para (with colPr)
+                app_first_idx = None
+                for i, a in enumerate(s2_attrs):
+                    if a['has_colpr']:
+                        app_first_idx = i
+                        break
+
+                if app_first_idx is not None:
+                    a = s2_attrs[app_first_idx]
+                    app_cp = a['charPrIDRefs'][-1] if a['charPrIDRefs'] else '0'
+                    sm['appendix_first'] = _make_style_tuple(
+                        app_cp, a['paraPrIDRef'], a['vertsize'],
+                        a['textheight'], a['baseline'], a['spacing'])
+
+                    # Extract appendix bar table cells (1-row 3-col)
+                    cells = _extract_table_cells(s2_paras[app_first_idx])
+                    for cell in cells:
+                        if cell['colAddr'] == 0:
+                            sm['bf_appendix_tab'] = cell['bf']
+                            if cell['charPrIDRefs']:
+                                cp_info = char_catalog.get(cell['charPrIDRefs'][0], {})
+                                h = cp_info.get('height', 1600)
+                                sm['appendix_tab'] = _make_style_tuple(
+                                    cell['charPrIDRefs'][0],
+                                    cell['paraPrIDRefs'][0] if cell['paraPrIDRefs'] else '18',
+                                    h, h, int(h*0.85), int(h*0.6))
+                        elif cell['colAddr'] == 1:
+                            sm['bf_appendix_sep'] = cell['bf']
+                            if cell['charPrIDRefs']:
+                                cp_info = char_catalog.get(cell['charPrIDRefs'][0], {})
+                                h = cp_info.get('height', 1550)
+                                sm['appendix_sep_cell'] = _make_style_tuple(
+                                    cell['charPrIDRefs'][0],
+                                    cell['paraPrIDRefs'][0] if cell['paraPrIDRefs'] else '3',
+                                    h, h, int(h*0.85), int(h*0.6))
+                        elif cell['colAddr'] == 2:
+                            sm['bf_appendix_title'] = cell['bf']
+                            cps = cell['charPrIDRefs']
+                            if cps:
+                                # Title charPr: the one with largest height
+                                title_cp = cps[0]
+                                max_h = 0
+                                for cp in cps:
+                                    info = char_catalog.get(cp, {})
+                                    if info.get('height', 0) > max_h:
+                                        max_h = info['height']
+                                        title_cp = cp
+                                pp = cell['paraPrIDRefs'][0] if cell['paraPrIDRefs'] else '16'
+                                sm['appendix_title'] = _make_style_tuple(
+                                    title_cp, pp, max_h, max_h, int(max_h*0.85), int(max_h*0.3))
+                                # sep_char: different charPr in same cell
+                                for cp in cps:
+                                    if cp != title_cp:
+                                        cp_info = char_catalog.get(cp, {})
+                                        h = cp_info.get('height', 1600)
+                                        sm['appendix_sep_char'] = _make_style_tuple(
+                                            cp, pp, h, h, int(h*0.85), int(h*0.3))
+                                        break
+
+                # Appendix spacer: next paragraph after first_para
+                if app_first_idx is not None and app_first_idx + 1 < len(s2_attrs):
+                    a = s2_attrs[app_first_idx + 1]
+                    sp_cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else '0'
+                    sm['appendix_spacer'] = _make_style_tuple(
+                        sp_cp, a['paraPrIDRef'], a['vertsize'],
+                        a['textheight'], a['baseline'], a['spacing'])
+
+            except Exception as e:
+                print(f"Warning: Could not parse section2.xml: {e}")
+
+        return sm
+
+    except Exception as e:
+        print(f"Warning: Could not build style map from template: {e}")
+        return None
+
+
+# ============================================================================
+# Template Skeleton Extraction & Injection (V4)
+# ============================================================================
 
 def parse_last_lineseg(paragraph_xml):
     """Parse the last top-level <hp:lineseg> in a paragraph for layout values.
@@ -457,83 +944,140 @@ def seed_vpt_from_skeleton(skeleton_paragraphs):
 def inject_body_title(p0_xml, title_text):
     """Replace the title text in the body section skeleton P0.
 
-    Finds the <hp:tc> with borderFillIDRef="9" (title cell) and replaces
-    ALL <hp:t> content within that cell's subList with the new title.
+    Finds the title cell by table geometry (3-row 1-col table, rowAddr="1")
+    and replaces ALL <hp:t> content within that cell.
+    Uses cell position instead of hardcoded borderFillIDRef. (V2 fix)
 
     Returns modified XML, or None if injection fails.
     """
-    # Find the title cell scope: from borderFillIDRef="9" to the closing </hp:tc>
-    pattern = re.compile(
-        r'(borderFillIDRef="9".*?</hp:tc>)',
-        re.DOTALL
-    )
-    m = pattern.search(p0_xml)
-    if not m:
+    # Find the 3-row 1-col table
+    tbl_m = re.search(r'<hp:tbl\b[^>]*rowCnt="3"[^>]*colCnt="1"[^>]*>(.*?)</hp:tbl>', p0_xml, re.DOTALL)
+    if not tbl_m:
+        # Try reversed attribute order
+        tbl_m = re.search(r'<hp:tbl\b[^>]*colCnt="1"[^>]*rowCnt="3"[^>]*>(.*?)</hp:tbl>', p0_xml, re.DOTALL)
+    if not tbl_m:
         return None
 
-    cell_xml = m.group(1)
-    original_cell = cell_xml
+    tbl_xml = tbl_m.group(0)
+    tbl_start = tbl_m.start()
 
-    # Replace all <hp:t>...</hp:t> within this cell
-    # First occurrence gets the title, subsequent ones get empty
-    replaced_count = [0]
+    # Find the <hp:tc> with rowAddr="1" (title cell — middle row)
+    tc_pattern = re.compile(r'(<hp:tc\b[^>]*>)(.*?)(</hp:tc>)', re.DOTALL)
+    new_tbl = tbl_xml
+    replaced = False
 
-    def replacer(match):
-        replaced_count[0] += 1
-        if replaced_count[0] == 1:
-            return f'<hp:t>{xml_escape(title_text)}</hp:t>'
-        return '<hp:t></hp:t>'
+    for tc_m in tc_pattern.finditer(tbl_xml):
+        tc_body = tc_m.group(2)
+        addr_m = re.search(r'<hp:cellAddr\s+colAddr="\d+"\s+rowAddr="1"', tc_body)
+        if not addr_m:
+            continue
 
-    new_cell = re.sub(r'<hp:t>[^<]*</hp:t>', replacer, cell_xml)
+        # Found the title cell — replace all <hp:t> content
+        cell_full = tc_m.group(0)
+        replaced_count = [0]
 
-    if replaced_count[0] == 0:
-        return None  # No <hp:t> found - trigger fallback
+        def replacer(match):
+            replaced_count[0] += 1
+            if replaced_count[0] == 1:
+                return f'<hp:t>{xml_escape(title_text)}</hp:t>'
+            return '<hp:t></hp:t>'
 
-    return p0_xml[:m.start()] + new_cell + p0_xml[m.end():]
+        new_cell = re.sub(r'<hp:t>[^<]*</hp:t>', replacer, cell_full)
+        if replaced_count[0] > 0:
+            new_tbl = new_tbl[:tc_m.start()] + new_cell + new_tbl[tc_m.end():]
+            replaced = True
+        break
+
+    if not replaced:
+        return None
+
+    return p0_xml[:tbl_start] + new_tbl + p0_xml[tbl_start + len(tbl_xml):]
 
 
 def inject_body_date(p1_xml, date_str, department):
     """Replace date and department in body section skeleton P1.
 
-    Uses charPrIDRef anchoring: "50" for date runs, "58" for department.
+    Uses run position instead of hardcoded charPrIDRef values. (V2 fix)
+    The date line has 3 runs: date prefix, department, date suffix.
+    Identifies groups by unique charPrIDRef values in document order.
+
     Returns modified XML, or None if no replacements occurred.
     """
+    if not date_str and not department:
+        return p1_xml
+
+    # Find all <hp:run> with <hp:t> content
+    run_pattern = re.compile(
+        r'(<hp:run\s+charPrIDRef="(\d+)"[^>]*>)(.*?)(</hp:run>)',
+        re.DOTALL
+    )
+    runs = list(run_pattern.finditer(p1_xml))
+    if len(runs) < 2:
+        return None
+
+    # Identify unique charPrIDRef groups in order
+    # First unique charPrIDRef = date runs, second = department run
+    unique_cps = []
+    seen = set()
+    for rm in runs:
+        cp = rm.group(2)
+        if cp not in seen:
+            unique_cps.append(cp)
+            seen.add(cp)
+
+    if len(unique_cps) < 2:
+        return None
+
+    date_cp = unique_cps[0]
+    dept_cp = unique_cps[1]
+
     result = p1_xml
-    replaced = False
+    # Process runs in reverse order to preserve offsets
+    runs_reversed = list(reversed(runs))
 
-    if date_str:
-        # Format: ('date, department) — replace first charPrIDRef="50" run's text
-        new_result, n = re.subn(
-            r'(charPrIDRef="50"[^>]*><hp:t>)[^<]*(</hp:t>)',
-            lambda m: m.group(1) + xml_escape(f"('{date_str}, ") + m.group(2),
-            result, count=1
-        )
-        if n > 0:
-            result = new_result
-            replaced = True
+    date_runs = [rm for rm in runs if rm.group(2) == date_cp]
+    dept_runs = [rm for rm in runs if rm.group(2) == dept_cp]
 
-    if department:
-        # Replace charPrIDRef="58" run's text with department
-        new_result, n = re.subn(
-            r'(charPrIDRef="58"[^>]*><hp:t>)[^<]*(</hp:t>)',
-            lambda m: m.group(1) + xml_escape(department) + m.group(2),
-            result, count=1
-        )
-        if n > 0:
-            result = new_result
-            replaced = True
+    # Replace in reverse offset order to preserve positions
+    replacements = []
 
-    if date_str or department:
-        # Replace the trailing ")" run (last charPrIDRef="50" run)
-        # Find all charPrIDRef="50" runs and replace the last one's text
-        runs_50 = list(re.finditer(r'(charPrIDRef="50"[^>]*><hp:t>)[^<]*(</hp:t>)', result))
-        if len(runs_50) >= 2:
-            last = runs_50[-1]
-            result = result[:last.start()] + last.group(1) + xml_escape(")") + last.group(2) + result[last.end():]
-            replaced = True
+    # Date prefix: first date run
+    if date_str and date_runs:
+        rm = date_runs[0]
+        old_t = re.search(r'<hp:t>[^<]*</hp:t>', rm.group(3))
+        if old_t:
+            date_prefix = xml_escape("('" + date_str + ", ")
+            new_t = "<hp:t>" + date_prefix + "</hp:t>"
+            new_body = rm.group(3)[:old_t.start()] + new_t + rm.group(3)[old_t.end():]
+            replacements.append((rm.start(), rm.end(), rm.group(1) + new_body + rm.group(4)))
 
-    if not replaced and (date_str or department):
-        return None  # Structural anchors not found
+    # Date suffix: last date run (if there are at least 2 date runs)
+    if (date_str or department) and len(date_runs) >= 2:
+        rm = date_runs[-1]
+        old_t = re.search(r'<hp:t>[^<]*</hp:t>', rm.group(3))
+        if old_t:
+            suffix_escaped = xml_escape(")")
+            new_t = "<hp:t>" + suffix_escaped + "</hp:t>"
+            new_body = rm.group(3)[:old_t.start()] + new_t + rm.group(3)[old_t.end():]
+            replacements.append((rm.start(), rm.end(), rm.group(1) + new_body + rm.group(4)))
+
+    # Department: first dept run
+    if department and dept_runs:
+        rm = dept_runs[0]
+        old_t = re.search(r'<hp:t>[^<]*</hp:t>', rm.group(3))
+        if old_t:
+            dept_escaped = xml_escape(department)
+            new_t = "<hp:t>" + dept_escaped + "</hp:t>"
+            new_body = rm.group(3)[:old_t.start()] + new_t + rm.group(3)[old_t.end():]
+            replacements.append((rm.start(), rm.end(), rm.group(1) + new_body + rm.group(4)))
+
+    if not replacements:
+        return None
+
+    # Apply replacements in reverse offset order
+    replacements.sort(key=lambda x: x[0], reverse=True)
+    for start, end, new_text in replacements:
+        result = result[:start] + new_text + result[end:]
 
     return result
 
@@ -541,52 +1085,76 @@ def inject_body_date(p1_xml, date_str, department):
 def inject_appendix_labels(p0_xml, tab_label, title_text):
     """Replace tab label and title in appendix skeleton P0.
 
-    Tab label: in <hp:tc> with borderFillIDRef="17"
-    Title: in <hp:tc> with borderFillIDRef="11"
+    Uses table geometry (1-row 3-col table) and cell position (colAddr)
+    instead of hardcoded borderFillIDRef values. (V2 fix)
+    colAddr=0 → tab label, colAddr=2 → title text.
 
     Returns modified XML, or None if injection fails.
     """
-    result = p0_xml
+    # Find the 1-row 3-col table
+    tbl_m = re.search(r'<hp:tbl\b[^>]*rowCnt="1"[^>]*colCnt="3"[^>]*>(.*?)</hp:tbl>', p0_xml, re.DOTALL)
+    if not tbl_m:
+        tbl_m = re.search(r'<hp:tbl\b[^>]*colCnt="3"[^>]*rowCnt="1"[^>]*>(.*?)</hp:tbl>', p0_xml, re.DOTALL)
+    if not tbl_m:
+        return None
+
+    tbl_xml = tbl_m.group(0)
+    tbl_start = tbl_m.start()
+    new_tbl = tbl_xml
     injected = False
 
-    # --- Tab label (borderFillIDRef="17") ---
-    bf17_pattern = re.compile(r'(borderFillIDRef="17".*?</hp:tc>)', re.DOTALL)
-    m17 = bf17_pattern.search(result)
-    if m17:
-        cell = m17.group(1)
-        new_cell, n = re.subn(
-            r'<hp:t>[^<]*</hp:t>',
-            f'<hp:t>{xml_escape(tab_label)}</hp:t>',
-            cell, count=1
-        )
-        if n > 0:
-            result = result[:m17.start()] + new_cell + result[m17.end():]
-            injected = True
+    # Process cells in reverse order to preserve offsets
+    tc_pattern = re.compile(r'(<hp:tc\b[^>]*>)(.*?)(</hp:tc>)', re.DOTALL)
+    tc_matches = list(tc_pattern.finditer(tbl_xml))
 
-    # --- Title (borderFillIDRef="11") ---
-    bf11_pattern = re.compile(r'(borderFillIDRef="11".*?</hp:tc>)', re.DOTALL)
-    m11 = bf11_pattern.search(result)
-    if m11:
-        cell = m11.group(1)
-        replaced_count = [0]
+    # Build replacement list
+    replacements = []
+    for tc_m in tc_matches:
+        tc_body = tc_m.group(2)
+        addr_m = re.search(r'<hp:cellAddr\s+colAddr="(\d+)"\s+rowAddr="\d+"', tc_body)
+        if not addr_m:
+            continue
+        col = int(addr_m.group(1))
 
-        def replacer(match):
-            replaced_count[0] += 1
-            if replaced_count[0] == 1:
-                return f'<hp:t> </hp:t>'  # leading space
-            elif replaced_count[0] == 2:
-                return f'<hp:t>{xml_escape(title_text)}</hp:t>'
-            return '<hp:t></hp:t>'
+        if col == 0 and tab_label:
+            # Tab label: replace first <hp:t> content
+            cell_full = tc_m.group(0)
+            new_cell, n = re.subn(
+                r'<hp:t>[^<]*</hp:t>',
+                f'<hp:t>{xml_escape(tab_label)}</hp:t>',
+                cell_full, count=1
+            )
+            if n > 0:
+                replacements.append((tc_m.start(), tc_m.end(), new_cell))
+                injected = True
 
-        new_cell = re.sub(r'<hp:t>[^<]*</hp:t>', replacer, cell)
-        if replaced_count[0] > 0:
-            result = result[:m11.start()] + new_cell + result[m11.end():]
-            injected = True
+        elif col == 2 and title_text:
+            # Title: replace <hp:t> content (first gets space, second gets title)
+            cell_full = tc_m.group(0)
+            replaced_count = [0]
+
+            def replacer(match):
+                replaced_count[0] += 1
+                if replaced_count[0] == 1:
+                    return '<hp:t> </hp:t>'  # leading space
+                elif replaced_count[0] == 2:
+                    return f'<hp:t>{xml_escape(title_text)}</hp:t>'
+                return '<hp:t></hp:t>'
+
+            new_cell = re.sub(r'<hp:t>[^<]*</hp:t>', replacer, cell_full)
+            if replaced_count[0] > 0:
+                replacements.append((tc_m.start(), tc_m.end(), new_cell))
+                injected = True
 
     if not injected:
         return None
 
-    return result
+    # Apply replacements in reverse order to preserve offsets
+    replacements.sort(key=lambda x: x[0], reverse=True)
+    for start, end, new_text in replacements:
+        new_tbl = new_tbl[:start] + new_text + new_tbl[end:]
+
+    return p0_xml[:tbl_start] + new_tbl + p0_xml[tbl_start + len(tbl_xml):]
 
 
 # ============================================================================
@@ -1036,35 +1604,68 @@ def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref
     department = section_config.get("department", "")
 
     # --- Template path: use skeleton from template section1.xml ---
+    # Uses structural markers (colPr, RIGHT-aligned paraPr) instead of position. (V3 fix)
     if template_dir:
         section1_path = Path(template_dir) / "Contents" / "section1.xml"
+        header_path = Path(template_dir) / "Contents" / "header.xml"
         if section1_path.exists():
             try:
                 raw_xml = section1_path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 raw_xml = None
             if raw_xml:
-                paras, sec_header = extract_top_level_paragraphs(raw_xml, 3)
+                all_paras, sec_header = _extract_all_top_level_paragraphs(raw_xml)
 
-                if len(paras) >= 3:
-                    p0 = inject_body_title(paras[0], title)
-                    p1 = inject_body_date(paras[1], date_text, department)
-                    p2 = paras[2]  # spacer, used as-is
+                if len(all_paras) >= 3:
+                    # Build paraPr catalog for alignment detection
+                    _, para_cat = _parse_header_catalogs(header_path) if header_path.exists() else (None, None)
 
-                    if p0 is not None and p1 is not None:
-                        vpt = seed_vpt_from_skeleton([p0, p1, p2])
+                    # Identify skeleton by structural markers
+                    skeleton_first = None  # has <hp:colPr>
+                    skeleton_date = None   # paraPr with RIGHT alignment
+                    skeleton_spacer = None # empty paragraph between date and first heading
 
-                        content_xml = ""
-                        for item in content_items:
-                            if item.get("type") == "heading":
-                                ss = sm["spacer_small"]
-                                vp = vpt.next(ss[2], ss[5])
-                                content_xml += paragraph_xml(ss[1], "0", run_xml(ss[0]),
-                                    lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
-                                                baseline=ss[4], spacing=ss[5]))
-                            content_xml += generate_content_item(item, sm, vpt)
+                    first_heading_idx = None
+                    for i, p in enumerate(all_paras):
+                        if '<hp:colPr' in p and skeleton_first is None:
+                            skeleton_first = p
+                        elif skeleton_first is not None and skeleton_date is None and first_heading_idx is None:
+                            pp_m = re.search(r'paraPrIDRef="(\d+)"', p)
+                            pp_id = pp_m.group(1) if pp_m else None
+                            pp_info = (para_cat or {}).get(pp_id, {})
+                            if pp_info.get('align') == 'RIGHT':
+                                skeleton_date = p
+                        elif skeleton_date is not None and skeleton_spacer is None:
+                            # First empty paragraph after date line
+                            texts = re.findall(r'<hp:t>([^<]+)</hp:t>', p)
+                            has_text = any(t.strip() for t in texts)
+                            if not has_text:
+                                skeleton_spacer = p
+                                break
+                        # Track first heading for boundary
+                        st_m = re.search(r'styleIDRef="(\d+)"', p)
+                        if st_m and st_m.group(1) == '15' and first_heading_idx is None:
+                            first_heading_idx = i
 
-                        return sec_header + p0 + p1 + p2 + content_xml + '</hs:sec>'
+                    if skeleton_first is not None and skeleton_date is not None and skeleton_spacer is not None:
+                        p0 = inject_body_title(skeleton_first, title)
+                        p1 = inject_body_date(skeleton_date, date_text, department)
+                        p2 = skeleton_spacer
+
+                        if p0 is not None and p1 is not None:
+                            vpt = seed_vpt_from_skeleton([p0, p1, p2])
+
+                            content_xml = ""
+                            for item in content_items:
+                                if item.get("type") == "heading":
+                                    ss = sm["spacer_small"]
+                                    vp = vpt.next(ss[2], ss[5])
+                                    content_xml += paragraph_xml(ss[1], "0", run_xml(ss[0]),
+                                        lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
+                                                    baseline=ss[4], spacing=ss[5]))
+                                content_xml += generate_content_item(item, sm, vpt)
+
+                            return sec_header + p0 + p1 + p2 + content_xml + '</hs:sec>'
 
     # --- Fallback: fully generated (original v3 behavior) ---
     vpt = VertPosTracker()
@@ -1128,6 +1729,7 @@ def generate_appendix_section_xml(section_config, sm, template_dir=None, outline
     content_items = section_config.get("content", [])
 
     # --- Template path: use skeleton from template section2.xml ---
+    # Uses structural markers (colPr) instead of position. (V3 fix)
     if template_dir:
         section2_path = Path(template_dir) / "Contents" / "section2.xml"
         if section2_path.exists():
@@ -1136,26 +1738,38 @@ def generate_appendix_section_xml(section_config, sm, template_dir=None, outline
             except (UnicodeDecodeError, OSError):
                 raw_xml = None
             if raw_xml:
-                paras, sec_header = extract_top_level_paragraphs(raw_xml, 2)
+                all_paras, sec_header = _extract_all_top_level_paragraphs(raw_xml)
 
-                if len(paras) >= 2:
-                    p0 = inject_appendix_labels(paras[0], tab_label, appendix_title)
-                    p1 = paras[1]  # spacer, used as-is
+                if len(all_paras) >= 2:
+                    # Identify skeleton by structural markers
+                    skeleton_first = None  # has <hp:colPr>
+                    skeleton_spacer = None # next paragraph after first_para
 
-                    if p0 is not None:
-                        vpt = seed_vpt_from_skeleton([p0, p1])
+                    for i, p in enumerate(all_paras):
+                        if '<hp:colPr' in p and skeleton_first is None:
+                            skeleton_first = p
+                        elif skeleton_first is not None and skeleton_spacer is None:
+                            skeleton_spacer = p
+                            break
 
-                        content_xml = ""
-                        for item in content_items:
-                            if item.get("type") == "heading":
-                                ss = sm["spacer_small"]
-                                vp = vpt.next(ss[2], ss[5])
-                                content_xml += paragraph_xml(ss[1], "0", run_xml(ss[0]),
-                                    lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
-                                                baseline=ss[4], spacing=ss[5]))
-                            content_xml += generate_content_item(item, sm, vpt)
+                    if skeleton_first is not None and skeleton_spacer is not None:
+                        p0 = inject_appendix_labels(skeleton_first, tab_label, appendix_title)
+                        p1 = skeleton_spacer
 
-                        return sec_header + p0 + p1 + content_xml + '</hs:sec>'
+                        if p0 is not None:
+                            vpt = seed_vpt_from_skeleton([p0, p1])
+
+                            content_xml = ""
+                            for item in content_items:
+                                if item.get("type") == "heading":
+                                    ss = sm["spacer_small"]
+                                    vp = vpt.next(ss[2], ss[5])
+                                    content_xml += paragraph_xml(ss[1], "0", run_xml(ss[0]),
+                                        lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
+                                                    baseline=ss[4], spacing=ss[5]))
+                                content_xml += generate_content_item(item, sm, vpt)
+
+                            return sec_header + p0 + p1 + content_xml + '</hs:sec>'
 
     # --- Fallback: fully generated (original v3 behavior) ---
     vpt = VertPosTracker()
@@ -1471,21 +2085,22 @@ def generate_hwpx(config, output_path, template_path=None):
     if not template_path.exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
 
-    is_bundled_template = (template_path.resolve() == TEMPLATE_PATH.resolve())
-
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir = Path(tmpdir)
 
         with zipfile.ZipFile(template_path, 'r') as zf:
             zf.extractall(tmpdir / "template")
 
-        # Determine style map
-        if is_bundled_template:
-            sm = DEFAULT_STYLE_MAP
-        else:
-            header_xml = tmpdir / "template" / "Contents" / "header.xml"
-            discovered = discover_styles_from_header(header_xml) if header_xml.exists() else None
-            sm = discovered if discovered else DEFAULT_STYLE_MAP
+        # Determine style map: hash-based cache with structural discovery
+        template_hash = compute_template_hash(template_path)
+        cache_path = SKILL_DIR / "assets" / "default_styles.json"
+        sm = load_cached_style_map(cache_path, template_hash)
+        if sm is None:
+            sm = build_style_map_from_template(tmpdir / "template")
+            if sm:
+                save_style_map_cache(cache_path, template_hash, sm)
+            else:
+                sm = dict(DEFAULT_STYLE_MAP)
 
         # Prepare output structure
         out_dir = tmpdir / "output"
