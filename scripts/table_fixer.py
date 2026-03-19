@@ -170,14 +170,15 @@ def _extract_cell_addrs_by_row(table_xml):
     return all_row_addrs
 
 
-def _build_occupied_sets(rows_addrs):
-    """Build occupied column sets for ALL rows in a single forward pass.
+def _build_occupied_sets(rows_addrs, up_to_row=None):
+    """Build occupied column sets for rows in a single forward pass.
 
-    Returns a list of sets, one per row. Each set contains column indices
-    occupied by rowSpan cells from previous rows.
+    Returns a list of sets, one per row (up to ``up_to_row`` inclusive).
+    Each set contains column indices occupied by rowSpan cells from
+    previous rows.
 
-    This is O(R * C) overall instead of O(R³) from calling
-    _build_occupied_set() per row.
+    Complexity is O(R * C) where R is the number of rows processed and
+    C is the column count.
 
     Uses the *expected* colAddr (computed with the same occupation logic)
     rather than the XML's current colAddr, so this is self-consistent
@@ -186,16 +187,23 @@ def _build_occupied_sets(rows_addrs):
     Args:
         rows_addrs: Output of _extract_cell_addrs_by_row() — list of lists
             of 6-tuples (colAddr, rowAddr, colSpan, rowSpan, abs_start, abs_end).
+        up_to_row: If given, only compute sets for rows 0..up_to_row
+            (inclusive). Rows beyond this are not allocated. Defaults to
+            len(rows_addrs) - 1 (all rows).
 
     Returns:
-        List of sets, one per row. occupied_sets[i] is the set of column
-        indices occupied by rowSpan cells from rows before i.
+        List of sets of length ``up_to_row + 1``. occupied_sets[i] is the
+        set of column indices occupied by rowSpan cells from rows before i.
     """
     num_rows = len(rows_addrs)
-    # occupied_sets[i] = columns occupied at row i by rowSpan from above
-    occupied_sets = [set() for _ in range(num_rows)]
+    if up_to_row is None:
+        up_to_row = num_rows - 1
+    limit = min(up_to_row, num_rows - 1)
 
-    for prev_idx in range(num_rows):
+    # occupied_sets[i] = columns occupied at row i by rowSpan from above
+    occupied_sets = [set() for _ in range(limit + 1)]
+
+    for prev_idx in range(limit + 1):
         occupied = occupied_sets[prev_idx]
         logical_col = 0
         for _, _, col_span, row_span, _, _ in rows_addrs[prev_idx]:
@@ -203,7 +211,7 @@ def _build_occupied_sets(rows_addrs):
                 logical_col += 1
             # If this cell spans multiple rows, mark those future rows
             if row_span > 1:
-                for future_row in range(prev_idx + 1, min(prev_idx + row_span, num_rows)):
+                for future_row in range(prev_idx + 1, min(prev_idx + row_span, limit + 1)):
                     for c in range(logical_col, logical_col + col_span):
                         occupied_sets[future_row].add(c)
             logical_col += col_span
@@ -214,7 +222,9 @@ def _build_occupied_sets(rows_addrs):
 def _build_occupied_set(rows_addrs, row_idx):
     """Build set of column indices occupied by rowSpan cells from previous rows.
 
-    Convenience wrapper that computes occupied sets up to row_idx.
+    Convenience wrapper around _build_occupied_sets() that returns only
+    the set for a single row. Computes only rows 0..row_idx (not the
+    full table) so partial lookups remain efficient.
 
     Args:
         rows_addrs: Output of _extract_cell_addrs_by_row() — list of lists
@@ -226,7 +236,7 @@ def _build_occupied_set(rows_addrs, row_idx):
     """
     if row_idx == 0:
         return set()
-    occupied_sets = _build_occupied_sets(rows_addrs)
+    occupied_sets = _build_occupied_sets(rows_addrs, up_to_row=row_idx)
     return occupied_sets[row_idx]
 
 

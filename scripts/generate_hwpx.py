@@ -374,18 +374,24 @@ def _extract_all_top_level_paragraphs(section_xml):
     """Extract ALL top-level paragraphs from section XML.
 
     Returns (paragraphs, section_header) where paragraphs is a list of
-    raw XML strings and section_header is the opening tag.
+    raw XML strings and section_header is the ``<hs:sec ...>`` opening tag
+    (including any ``<?xml ...?>`` declaration preceding it).
 
     Delegates to _parser.find_top_level_paragraphs() which handles
     CDATA sections, XML comments, and partial tag name matching safely.
+
+    The parser is called on the *body* slice (after ``<hs:sec ...>``) so
+    that the section header itself — which may contain namespace URIs
+    resembling tag patterns — is excluded from the paragraph search.
     """
     try:
         sec_idx = section_xml.index('<hs:sec')
         sec_close = section_xml.index('>', sec_idx) + 1
         section_header = section_xml[:sec_close]
+        body = section_xml[sec_close:]
 
-        spans = _parser.find_top_level_paragraphs(section_xml)
-        paragraphs = [section_xml[start:end] for start, end in spans]
+        spans = _parser.find_top_level_paragraphs(body)
+        paragraphs = [body[start:end] for start, end in spans]
 
         return paragraphs, section_header
     except (ValueError, IndexError):

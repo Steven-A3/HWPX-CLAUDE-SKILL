@@ -137,6 +137,19 @@ def _skip_non_tag(xml, pos):
     return _skip_comment(xml, pos)
 
 
+def _advance_to_lt(xml, pos, xml_len):
+    """If pos is not at '<', jump forward to the next '<' via str.find().
+
+    Returns pos unchanged if already at '<'. Returns xml_len if no '<' found.
+    This avoids character-by-character Python iteration over text content
+    between tags, delegating the scan to C-level str.find().
+    """
+    if pos < xml_len and xml[pos] != '<':
+        next_lt = xml.find('<', pos)
+        return next_lt if next_lt != -1 else xml_len
+    return pos
+
+
 def find_top_level_paragraphs(section_xml):
     """Find all top-level <hp:p> elements in section XML.
 
@@ -170,7 +183,8 @@ def find_tables(section_xml):
 def find_direct_rows(table_xml):
     """Find direct <hp:tr> children of a table (not nested in sub-tables).
 
-    Skips CDATA sections and XML comments.
+    Skips CDATA sections and XML comments. Uses _advance_to_lt() to skip
+    past non-tag text content.
 
     Args:
         table_xml: Raw XML string of a single <hp:tbl>...</hp:tbl>.
@@ -181,16 +195,22 @@ def find_direct_rows(table_xml):
     rows = []
     tbl_depth = 0
     pos = 0
+    xml_len = len(table_xml)
 
-    while pos < len(table_xml):
+    while pos < xml_len:
         # Skip CDATA and comments
         new_pos = _skip_non_tag(table_xml, pos)
         if new_pos != pos:
             pos = new_pos
             continue
+        # Skip text content; re-enter loop so _skip_non_tag checks new pos
+        new_pos = _advance_to_lt(table_xml, pos, xml_len)
+        if new_pos != pos:
+            pos = new_pos
+            continue
         if table_xml[pos:pos + 7] == '<hp:tbl':
             nc = pos + 7
-            if nc < len(table_xml) and table_xml[nc] in (' ', '>'):
+            if nc < xml_len and table_xml[nc] in (' ', '>'):
                 tbl_depth += 1
             pos += 7
             continue
@@ -200,7 +220,7 @@ def find_direct_rows(table_xml):
             continue
         if tbl_depth == 1 and table_xml[pos:pos + 6] == '<hp:tr':
             nc = pos + 6
-            if nc < len(table_xml) and table_xml[nc] in (' ', '>'):
+            if nc < xml_len and table_xml[nc] in (' ', '>'):
                 tr_start = pos
                 tr_end = _find_matching_close(table_xml, pos, '<hp:tr', '</hp:tr>')
                 if tr_end != -1:
@@ -216,7 +236,8 @@ def find_direct_cells(row_xml):
     """Find direct <hp:tc> children of a table row.
 
     Uses depth tracking to handle nested tables inside cells.
-    Skips CDATA sections and XML comments.
+    Skips CDATA sections and XML comments. Uses _advance_to_lt() to skip
+    past non-tag text content.
 
     Args:
         row_xml: Raw XML string of a single <hp:tr>...</hp:tr>.
@@ -228,17 +249,23 @@ def find_direct_cells(row_xml):
     tc_depth = 0
     tbl_depth = 0  # track nested tables to skip their cells
     pos = 0
+    xml_len = len(row_xml)
 
-    while pos < len(row_xml):
+    while pos < xml_len:
         # Skip CDATA and comments
         new_pos = _skip_non_tag(row_xml, pos)
+        if new_pos != pos:
+            pos = new_pos
+            continue
+        # Skip text content; re-enter loop so _skip_non_tag checks new pos
+        new_pos = _advance_to_lt(row_xml, pos, xml_len)
         if new_pos != pos:
             pos = new_pos
             continue
         # Track nested tables
         if row_xml[pos:pos + 7] == '<hp:tbl':
             nc = pos + 7
-            if nc < len(row_xml) and row_xml[nc] in (' ', '>'):
+            if nc < xml_len and row_xml[nc] in (' ', '>'):
                 tbl_depth += 1
             pos += 7
             continue
@@ -249,7 +276,7 @@ def find_direct_cells(row_xml):
         # Only match cells at the row level (no nested tables)
         if tbl_depth == 0 and row_xml[pos:pos + 6] == '<hp:tc':
             nc = pos + 6
-            if nc < len(row_xml) and row_xml[nc] in (' ', '>'):
+            if nc < xml_len and row_xml[nc] in (' ', '>'):
                 tc_start = pos
                 tc_end = _find_matching_close(row_xml, pos, '<hp:tc', '</hp:tc>')
                 if tc_end != -1:
@@ -381,10 +408,8 @@ def _find_elements(xml, open_prefix, close_tag):
 def _find_matching_close(xml, start, open_prefix, close_tag):
     """Find matching close tag from start position using depth tracking.
 
-    Skips CDATA sections and XML comments.
-    Uses str.find() to jump between candidate positions instead of
-    scanning character-by-character, giving O(n * k) performance where
-    k is the number of tag occurrences rather than O(n) per character.
+    Skips CDATA sections and XML comments. Uses _advance_to_lt() to skip
+    past non-tag text content between tags.
 
     Returns end offset (position after close_tag), or -1 if not found.
     """
@@ -401,12 +426,11 @@ def _find_matching_close(xml, start, open_prefix, close_tag):
             i = new_i
             continue
 
-        # Jump to the next '<' character — no tag can start without it
-        if xml[i] != '<':
-            next_lt = xml.find('<', i)
-            if next_lt == -1:
-                break
-            i = next_lt
+        # Skip text content between tags; re-enter loop so _skip_non_tag
+        # can check the new position (it may land on a CDATA/comment opener)
+        new_i = _advance_to_lt(xml, i, xml_len)
+        if new_i != i:
+            i = new_i
             continue
 
         if xml[i:i + prefix_len] == open_prefix:
