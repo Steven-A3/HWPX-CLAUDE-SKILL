@@ -23,6 +23,39 @@ This approach ensures Hancom Office compatibility because the complex header.xml
 
 **Template customization**: Editing the template in Hancom Office (e.g., changing fonts, colors, or layout in the title bar) will propagate to all generated documents automatically.
 
+### Byte-Preserving Editing Architecture
+
+For reading and modifying existing HWPX files, a separate set of modules enforces **byte-level XML preservation**:
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│  zip_handler.py │────→│  read_hwpx.py    │────→│ (analysis only) │
+│  (ZIP I/O with  │     │  (etree parsing   │     │  structure info  │
+│  compress_type  │     │   for analysis,   │     │  style catalog   │
+│  preservation)  │     │   NO tostring())  │     │  table inventory │
+└────────┬────────┘     └──────────────────┘     └─────────────────┘
+         │
+         │              ┌──────────────────┐     ┌─────────────────┐
+         └─────────────→│  modify_hwpx.py  │────→│ (byte surgery)  │
+                        │  (str.replace &  │     │  text replace    │
+                        │   regex on raw   │     │  para insert     │
+                        │   XML bytes)     │     │  row insert      │
+                        └────────┬─────────┘     └─────────────────┘
+                                 │
+                    ┌────────────┼────────────┐
+                    ▼            ▼            ▼
+            ┌──────────┐ ┌────────────┐ ┌────────────┐
+            │xml_templ │ │table_fixer │ │zip_handler │
+            │ates.py   │ │.py         │ │.py         │
+            │(pattern  │ │(rowCnt,    │ │(repackage  │
+            │ extract  │ │ cellAddr,  │ │ with same  │
+            │ & render)│ │ rowAddr    │ │ compress   │
+            │          │ │ auto-fix)  │ │ types)     │
+            └──────────┘ └────────────┘ └────────────┘
+```
+
+**Core principle**: `etree.parse()`는 분석(read) 전용. 수정(write)은 반드시 원본 바이트에 문자열 연산으로 수행. `etree.tostring()`은 최종 출력에 절대 사용 금지.
+
 ## How to Use
 
 Run the Python script to generate HWPX:
@@ -120,6 +153,113 @@ document.hwpx (ZIP)
 6. **Each paragraph must have** `<hp:linesegarray>` after all runs
 7. **charPrIDRef** and **paraPrIDRef** must reference valid IDs in header.xml
 8. **content.hpf** must list all sections and binary data in manifest and spine
+
+## Critical Integrity Rules (Lessons Learned)
+
+These rules were discovered through production failures where generated files were rejected by Hancom Office:
+
+### Rule 9: NO lxml/etree Serialization on Original XML
+- **Problem**: 원본 HWPX XML은 한 줄 compact 포맷이다. `lxml`이나 `etree.tostring()`으로 재직렬화하면 pretty-print/속성 재정렬이 발생하여 한컴오피스가 변조(corruption)로 감지한다.
+- **Solution**: 최종 출력에 `etree.tostring()` 절대 사용 금지. 원본 XML 바이트를 그대로 보존하고, 문자열 삽입(string surgery) 방식으로 수정한다.
+- **Pattern**: 파싱은 `etree.parse()`로 하되 분석 전용. 수정은 원본 바이트에 `str.replace()` 또는 정규식으로 처리.
+- **Applies to**: `read_hwpx.py` (분석만), `modify_hwpx.py` (바이트 보존 편집), `xml_templates.py` (문자열 치환)
+
+### Rule 10: Table rowCnt/cellAddr Consistency (with colSpan + rowSpan)
+- **Problem**: `<hp:tbl>` 의 `rowCnt` 속성이 실제 `<hp:tr>` 개수와 불일치하면 파일 열기 오류 발생.
+- **Solution**: 테이블 수정(행 추가/삭제) 후 반드시 `rowCnt`, `cellAddr`, `rowAddr` 를 일괄 업데이트한다.
+- **Validation**: `table_fixer.py`가 모든 테이블의 정합성을 자동 검증/수정.
+- **Formula**: `rowCnt = len(tr_elements)`, `rowAddr = row_idx` (0-based)
+- **colAddr Formula**: 셀 병합(colSpan)과 행 병합(rowSpan)을 모두 고려한 논리적 그리드 위치 계산:
+  ```
+  # 1단계: 이전 행의 rowSpan이 현재 행을 점유하는 열 계산
+  occupied = _build_occupied_set(rows_addrs, row_idx)
+
+  # 2단계: 점유된 열을 건너뛰며 colAddr 할당
+  logical_col = 0
+  for cell in row:
+      while logical_col in occupied:
+          logical_col += 1   # rowSpan으로 점유된 열 건너뜀
+      cell.colAddr = logical_col
+      logical_col += cell.colSpan   # colSpan>1이면 병합 열 건너뜀
+  ```
+- **colSpan Example**: colCnt=3, Row 0에 colSpan=2 셀 + 일반 셀 → colAddr=0, colAddr=2 (1을 건너뜀)
+- **rowSpan Example**: colCnt=3, Row 0의 첫 셀이 rowSpan=2 → Row 1의 셀들은 colAddr=1부터 시작 (col 0은 점유됨)
+- **Nested Table Safety**: `_extract_col_span()` / `_extract_row_span()`은 마지막 `</hp:subList>` 이후의 메타데이터만 검색하여 중첩 테이블의 cellSpan 값과 혼동하지 않음
+
+### Rule 12: Validate XML Well-Formedness at Integration Boundary
+- **Problem**: 문자열 수술(string surgery) 후 잘못된 위치에 삽입하면 XML 구조가 깨질 수 있으나, 같은 파서로 검증하면 동일한 버그를 공유하여 발견 불가.
+- **Solution**: `update_section()` / `update_sections()`에서 수정 전후 XML을 `ET.fromstring()`으로 검증 (기본값 `validate=True`). 이는 읽기 전용 검증이며 `ET.tostring()`은 절대 사용하지 않음.
+- **Pattern**: 입력 검증(corrupted source 탐지) + 출력 검증(string surgery 오류 탐지) = 이중 안전망
+
+### Rule 13: Unclosed CDATA/Comment Safety
+- **Problem**: 손상된 XML에서 `<![CDATA[`가 열리고 `]]>`로 닫히지 않으면, 파서가 CDATA 내부의 태그형 문자열을 실제 태그로 잘못 인식하여 phantom 요소를 생성함.
+- **Solution**: `_skip_cdata()` / `_skip_comment()`에서 닫는 태그를 찾지 못하면 `len(xml)`을 반환하여 나머지 전체를 스킵. 보수적 접근: 데이터 손실보다 안전 우선.
+- **Detection**: `check_for_unclosed_constructs(xml)`로 파싱 전 미리 미닫힘 CDATA/comment를 탐지 가능. 빈 리스트면 안전, 비어있지 않으면 파싱 결과가 불완전할 수 있음.
+- **Pattern**: 탐지 → 판단 → 파싱 (탐지 단계에서 위험 신호를 명시적으로 제공)
+
+### Rule 11: ZIP Compress Type Preservation
+- **Problem**: 원본 HWPX ZIP의 각 엔트리별 압축방식(`STORED`/`DEFLATED`)을 변경하면 무결성 검증 실패.
+- **Solution**: 원본과 동일한 `compress_type`을 엔트리별로 보존한다. `mimetype`은 반드시 `STORED`, 나머지는 원본의 압축방식을 따른다.
+- **Implementation**: `zip_handler.py`가 원본 ZIP 엔트리 메타데이터를 기록하고, 재패키징 시 동일한 `compress_type` 적용.
+
+## Module Architecture
+
+The HWPX skill uses a modular architecture. `generate_hwpx.py` handles new document creation from config JSON. The following modules handle reading and modifying existing HWPX files:
+
+### scripts/read_hwpx.py — HWPX Parser & Structure Analyzer
+- **Purpose**: 기존 HWPX 파일을 열어 구조를 분석하고, 섹션/테이블/스타일 정보를 추출
+- **Key Functions**:
+  - `open_hwpx(path)` → 압축 해제 + 엔트리 메타데이터(compress_type 포함) 기록
+  - `parse_sections()` → section XML을 etree로 파싱 (분석 전용, 직렬화 금지)
+  - `list_tables()` → 모든 테이블의 위치, 크기, 헤더 정보 반환
+  - `get_styles()` → header.xml에서 charPr/paraPr/borderFill 카탈로그 추출
+  - `get_structure_summary()` → 문서 구조 요약 (섹션 수, 테이블 수, 이미지 수 등)
+- **Constraint**: `etree.tostring()` 절대 사용 금지 — 분석만 수행, 수정은 `modify_hwpx.py`에 위임
+
+### scripts/modify_hwpx.py — Byte-Preserving HWPX Editor
+- **Purpose**: 원본 XML 바이트를 보존하면서 HWPX 내용을 수정
+- **Key Functions**:
+  - `replace_text(section_bytes, old_text, new_text)` → 텍스트 내용 치환 (XML 태그 보존)
+  - `insert_paragraph_after(section_bytes, anchor_pattern, new_para_xml)` → 특정 위치 뒤에 문단 삽입
+  - `insert_table_row(section_bytes, table_pattern, row_xml, position)` → 테이블 행 삽입
+  - `delete_paragraph(section_bytes, para_pattern)` → 문단 삭제
+  - `update_section(hwpx_path, section_name, modifier_fn, output_path)` → 섹션 단위 수정 + ZIP 재패키징
+- **Constraint**: 모든 수정은 `str.replace()` 또는 정규식으로 원본 바이트에 직접 수행. DOM 직렬화 금지.
+
+### scripts/xml_templates.py — XML Template Extraction & String Substitution
+- **Purpose**: 원본 HWPX에서 XML 패턴을 추출하여 템플릿화하고, 문자열 치환으로 새 요소 생성
+- **Key Functions**:
+  - `extract_paragraph_template(section_bytes, para_pattern)` → 기존 문단을 템플릿으로 추출 (플레이스홀더 삽입)
+  - `extract_table_template(section_bytes, table_pattern)` → 기존 테이블 구조를 템플릿으로 추출
+  - `render_paragraph(template, text, charPrIDRef, paraPrIDRef)` → 템플릿에 값 주입하여 새 문단 XML 생성
+  - `render_table_row(template, cells)` → 템플릿에 셀 데이터 주입하여 새 행 XML 생성
+- **Constraint**: `etree.tostring()` 금지 — 템플릿은 문자열이며, `str.format()` 또는 `str.replace()`로 값 주입
+
+### scripts/table_fixer.py — Table Consistency Validator & Auto-Fixer
+- **Purpose**: 테이블의 rowCnt/cellAddr/rowAddr 정합성을 자동 검증하고 수정
+- **Key Functions**:
+  - `validate_table(table_xml_bytes)` → 테이블 정합성 검증 (rowCnt, colAddr, rowAddr — colSpan/rowSpan 고려)
+  - `fix_table(table_xml_bytes)` → rowCnt, cellAddr, rowAddr 자동 수정 (2D 점유 그리드 사용)
+  - `validate_all_tables(section_bytes)` → 섹션 내 모든 테이블 일괄 검증
+  - `fix_all_tables(section_bytes)` → 섹션 내 모든 테이블 일괄 수정
+- **Validation Rules**:
+  - `rowCnt` == 실제 `<hp:tr>` 개수
+  - `rowAddr` == `row_idx` (0-based)
+  - `colAddr` == 논리적 그리드 열 위치 (colSpan 누적 + rowSpan 점유 열 건너뜀)
+  - 중첩 테이블의 cellSpan은 무시 (마지막 `</hp:subList>` 이후 메타데이터만 검색)
+  - 수정은 정규식으로 속성값만 교체 (XML 구조 보존)
+
+### scripts/zip_handler.py — Compress-Type Preserving ZIP Handler
+- **Purpose**: 원본 ZIP 엔트리 메타데이터를 보존하며 HWPX 재패키징
+- **Key Functions**:
+  - `read_hwpx_zip(path)` → ZIP 읽기 + 엔트리별 compress_type/compress_level 기록
+  - `write_hwpx_zip(entries, metadata, output_path)` → 원본 compress_type 보존하며 재패키징
+  - `replace_entry(path, entry_name, new_bytes, output_path)` → 단일 엔트리 교체 (나머지 보존)
+  - `add_entry(path, entry_name, data, output_path)` → 새 엔트리 추가 (기존 엔트리 보존)
+- **Rules**:
+  - `mimetype`은 항상 `ZIP_STORED`, 반드시 첫 번째 엔트리
+  - 기존 엔트리의 `compress_type` 변경 금지
+  - 새 엔트리는 `ZIP_DEFLATED` 기본값 사용
 
 ## Namespace Declarations
 

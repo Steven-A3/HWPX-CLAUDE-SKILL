@@ -1,0 +1,413 @@
+#!/usr/bin/env python3
+"""
+Shared XML parsing helpers for HWPX modules.
+
+All parsers work on raw XML strings using manual depth tracking.
+No etree serialization is ever performed.
+
+Safety:
+  - CDATA sections are skipped (depth counters frozen inside)
+  - XML comments are skipped (depth counters frozen inside)
+  - All tag matching verifies next-char is space/>/slash to avoid
+    matching partial tag names (e.g. <hp:paraShape vs <hp:p)
+"""
+
+import re
+from xml.etree import ElementTree as ET
+
+
+# ============================================================================
+# Input Validation (read-only — never serializes)
+# ============================================================================
+
+def validate_wellformed(xml_string):
+    """Validate that XML string is well-formed using stdlib parser.
+
+    This is a READ-ONLY validation pass. It uses ET.fromstring() to verify
+    the XML is parseable, but NEVER calls ET.tostring(). The raw string
+    is always used for actual operations.
+
+    Args:
+        xml_string: Raw XML string to validate.
+
+    Returns:
+        True if well-formed.
+
+    Raises:
+        ValueError: If XML is malformed, with details about the error.
+    """
+    try:
+        ET.fromstring(xml_string)
+        return True
+    except ET.ParseError as e:
+        raise ValueError(f"Malformed XML input: {e}") from e
+
+
+def check_for_unclosed_constructs(xml_string):
+    """Check for unclosed CDATA sections or XML comments in the string.
+
+    When _skip_cdata() or _skip_comment() encounter an unclosed construct,
+    they skip to len(xml) — silently causing the parser to produce fewer
+    elements than expected. This function provides an explicit signal.
+
+    Use this BEFORE parsing to detect truncation risk. If unclosed
+    constructs are found, the parse results may be incomplete.
+
+    Args:
+        xml_string: Raw XML string to check.
+
+    Returns:
+        List of dicts, each with 'type' ('CDATA' or 'comment') and
+        'position' (offset where the unclosed construct starts).
+        Empty list means no unclosed constructs found.
+    """
+    issues = []
+    pos = 0
+    while pos < len(xml_string):
+        # Check for CDATA opener
+        cdata_pos = xml_string.find('<![CDATA[', pos)
+        comment_pos = xml_string.find('<!--', pos)
+
+        # No more openers
+        if cdata_pos == -1 and comment_pos == -1:
+            break
+
+        # Process whichever comes first
+        if cdata_pos != -1 and (comment_pos == -1 or cdata_pos < comment_pos):
+            end = xml_string.find(']]>', cdata_pos + 9)
+            if end == -1:
+                issues.append({'type': 'CDATA', 'position': cdata_pos})
+                break  # rest of string is inside unclosed CDATA
+            pos = end + 3
+        else:
+            end = xml_string.find('-->', comment_pos + 4)
+            if end == -1:
+                issues.append({'type': 'comment', 'position': comment_pos})
+                break  # rest of string is inside unclosed comment
+            pos = end + 3
+
+    return issues
+
+
+# ============================================================================
+# Safe Position Skipping
+# ============================================================================
+
+def _skip_cdata(xml, pos):
+    """If pos is at start of a CDATA section, return position after it.
+
+    Returns pos unchanged if not at a CDATA start.
+    If CDATA is opened but never closed, returns len(xml) to skip to end —
+    this prevents the parser from matching tag-like content inside the
+    unclosed CDATA section.
+    """
+    if xml[pos:pos + 9] == '<![CDATA[':
+        end = xml.find(']]>', pos + 9)
+        if end != -1:
+            return end + 3
+        # Unclosed CDATA — treat rest of string as CDATA to be safe
+        return len(xml)
+    return pos
+
+
+def _skip_comment(xml, pos):
+    """If pos is at start of an XML comment, return position after it.
+
+    Returns pos unchanged if not at a comment start.
+    If comment is opened but never closed, returns len(xml) to skip to end —
+    same rationale as _skip_cdata.
+    """
+    if xml[pos:pos + 4] == '<!--':
+        end = xml.find('-->', pos + 4)
+        if end != -1:
+            return end + 3
+        # Unclosed comment — treat rest of string as comment to be safe
+        return len(xml)
+    return pos
+
+
+def _skip_non_tag(xml, pos):
+    """Skip CDATA sections and XML comments at current position.
+
+    Returns new position (may be unchanged if not at CDATA/comment).
+    """
+    new_pos = _skip_cdata(xml, pos)
+    if new_pos != pos:
+        return new_pos
+    return _skip_comment(xml, pos)
+
+
+def find_top_level_paragraphs(section_xml):
+    """Find all top-level <hp:p> elements in section XML.
+
+    Uses depth tracking to correctly skip nested <hp:p> inside table cells.
+    Skips CDATA sections and XML comments.
+
+    Args:
+        section_xml: Raw XML string.
+
+    Returns:
+        List of (start, end) tuples — byte offsets into section_xml.
+    """
+    return _find_elements(section_xml, '<hp:p', '</hp:p>')
+
+
+def find_tables(section_xml):
+    """Find all top-level <hp:tbl> elements in section XML.
+
+    Args:
+        section_xml: Raw XML string.
+
+    Returns:
+        List of (start, end, xml) tuples.
+    """
+    results = []
+    for start, end in _find_elements(section_xml, '<hp:tbl', '</hp:tbl>'):
+        results.append((start, end, section_xml[start:end]))
+    return results
+
+
+def find_direct_rows(table_xml):
+    """Find direct <hp:tr> children of a table (not nested in sub-tables).
+
+    Skips CDATA sections and XML comments.
+
+    Args:
+        table_xml: Raw XML string of a single <hp:tbl>...</hp:tbl>.
+
+    Returns:
+        List of (start, end) tuples relative to table_xml.
+    """
+    rows = []
+    tbl_depth = 0
+    pos = 0
+
+    while pos < len(table_xml):
+        # Skip CDATA and comments
+        new_pos = _skip_non_tag(table_xml, pos)
+        if new_pos != pos:
+            pos = new_pos
+            continue
+        if table_xml[pos:pos + 7] == '<hp:tbl':
+            nc = pos + 7
+            if nc < len(table_xml) and table_xml[nc] in (' ', '>'):
+                tbl_depth += 1
+            pos += 7
+            continue
+        if table_xml[pos:pos + 10] == '</hp:tbl>':
+            tbl_depth -= 1
+            pos += 10
+            continue
+        if tbl_depth == 1 and table_xml[pos:pos + 6] == '<hp:tr':
+            nc = pos + 6
+            if nc < len(table_xml) and table_xml[nc] in (' ', '>'):
+                tr_start = pos
+                tr_end = _find_matching_close(table_xml, pos, '<hp:tr', '</hp:tr>')
+                if tr_end != -1:
+                    rows.append((tr_start, tr_end))
+                    pos = tr_end
+                    continue
+        pos += 1
+
+    return rows
+
+
+def find_direct_cells(row_xml):
+    """Find direct <hp:tc> children of a table row.
+
+    Uses depth tracking to handle nested tables inside cells.
+    Skips CDATA sections and XML comments.
+
+    Args:
+        row_xml: Raw XML string of a single <hp:tr>...</hp:tr>.
+
+    Returns:
+        List of (start, end) tuples relative to row_xml.
+    """
+    cells = []
+    tc_depth = 0
+    tbl_depth = 0  # track nested tables to skip their cells
+    pos = 0
+
+    while pos < len(row_xml):
+        # Skip CDATA and comments
+        new_pos = _skip_non_tag(row_xml, pos)
+        if new_pos != pos:
+            pos = new_pos
+            continue
+        # Track nested tables
+        if row_xml[pos:pos + 7] == '<hp:tbl':
+            nc = pos + 7
+            if nc < len(row_xml) and row_xml[nc] in (' ', '>'):
+                tbl_depth += 1
+            pos += 7
+            continue
+        if row_xml[pos:pos + 10] == '</hp:tbl>':
+            tbl_depth -= 1
+            pos += 10
+            continue
+        # Only match cells at the row level (no nested tables)
+        if tbl_depth == 0 and row_xml[pos:pos + 6] == '<hp:tc':
+            nc = pos + 6
+            if nc < len(row_xml) and row_xml[nc] in (' ', '>'):
+                tc_start = pos
+                tc_end = _find_matching_close(row_xml, pos, '<hp:tc', '</hp:tc>')
+                if tc_end != -1:
+                    cells.append((tc_start, tc_end))
+                    pos = tc_end
+                    continue
+        pos += 1
+
+    return cells
+
+
+def count_direct_rows(table_xml):
+    """Count direct <hp:tr> children of a table."""
+    return len(find_direct_rows(table_xml))
+
+
+def find_first_row(table_xml):
+    """Find the first direct <hp:tr> in a table.
+
+    Args:
+        table_xml: Raw XML string of a <hp:tbl>.
+
+    Returns:
+        Row XML string, or None if not found.
+    """
+    rows = find_direct_rows(table_xml)
+    if not rows:
+        return None
+    start, end = rows[0]
+    return table_xml[start:end]
+
+
+# ============================================================================
+# Internal helpers
+# ============================================================================
+
+def _find_cdata_or_comment_in_range(xml, start, end):
+    """Check if a CDATA section or XML comment exists in xml[start:end].
+
+    Uses C-level str.find() for O(n) performance instead of character-by-
+    character Python scanning. Returns the position AFTER the CDATA/comment
+    if one is found that overlaps or spans past `end`, or None if the range
+    is clean.
+
+    Args:
+        xml: Full XML string.
+        start: Start of range to check.
+        end: End of range to check (exclusive).
+
+    Returns:
+        Position after the CDATA/comment if found, or None.
+    """
+    search_pos = start
+    while search_pos < end:
+        # Find earliest CDATA or comment opener in the range
+        cdata_pos = xml.find('<![CDATA[', search_pos, end)
+        comment_pos = xml.find('<!--', search_pos, end)
+
+        # No CDATA or comment in range — clean
+        if cdata_pos == -1 and comment_pos == -1:
+            return None
+
+        # Pick whichever comes first
+        if cdata_pos == -1:
+            found_pos = comment_pos
+        elif comment_pos == -1:
+            found_pos = cdata_pos
+        else:
+            found_pos = min(cdata_pos, comment_pos)
+
+        # Use _skip_non_tag to find the end of this CDATA/comment
+        after = _skip_non_tag(xml, found_pos)
+        if after > end:
+            # The CDATA/comment spans past our candidate tag — skip past it
+            return after
+        # The CDATA/comment ends before our candidate — continue searching
+        search_pos = after
+
+    return None
+
+
+def _find_elements(xml, open_prefix, close_tag):
+    """Find top-level elements matching open_prefix/close_tag with depth tracking.
+
+    Skips CDATA sections and XML comments to prevent false tag matches.
+
+    Args:
+        xml: Raw XML string.
+        open_prefix: Opening tag prefix (e.g. '<hp:p').
+        close_tag: Full closing tag (e.g. '</hp:p>').
+
+    Returns:
+        List of (start, end) tuples.
+    """
+    results = []
+    pos = 0
+    prefix_len = len(open_prefix)
+
+    while pos < len(xml):
+        # Skip CDATA and comments at current position
+        new_pos = _skip_non_tag(xml, pos)
+        if new_pos != pos:
+            pos = new_pos
+            continue
+        start = xml.find(open_prefix, pos)
+        if start == -1:
+            break
+        # Check if there's a CDATA/comment between pos and start.
+        # Uses str.find (C-level) instead of character-by-character scan.
+        skip_target = _find_cdata_or_comment_in_range(xml, pos, start)
+        if skip_target is not None:
+            pos = skip_target
+            continue
+
+        next_idx = start + prefix_len
+        if next_idx < len(xml) and xml[next_idx] not in (' ', '>', '/'):
+            pos = next_idx
+            continue
+
+        end = _find_matching_close(xml, start, open_prefix, close_tag)
+        if end == -1:
+            break
+        results.append((start, end))
+        pos = end
+
+    return results
+
+
+def _find_matching_close(xml, start, open_prefix, close_tag):
+    """Find matching close tag from start position using depth tracking.
+
+    Skips CDATA sections and XML comments.
+
+    Returns end offset (position after close_tag), or -1 if not found.
+    """
+    depth = 0
+    prefix_len = len(open_prefix)
+    close_len = len(close_tag)
+    i = start
+
+    while i < len(xml):
+        # Skip CDATA and comments
+        new_i = _skip_non_tag(xml, i)
+        if new_i != i:
+            i = new_i
+            continue
+        if xml[i:i + prefix_len] == open_prefix:
+            nc = i + prefix_len
+            if nc < len(xml) and xml[nc] in (' ', '>', '/'):
+                depth += 1
+            i += prefix_len
+            continue
+        if xml[i:i + close_len] == close_tag:
+            depth -= 1
+            if depth == 0:
+                return i + close_len
+            i += close_len
+            continue
+        i += 1
+
+    return -1

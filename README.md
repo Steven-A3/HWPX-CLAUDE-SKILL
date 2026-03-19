@@ -20,6 +20,7 @@ This project is a [Claude Skill](https://docs.anthropic.com/) that enables Claud
 
 - **템플릿 기반 생성**: 실제 HWPX 템플릿을 사용하여 한컴오피스 호환성 보장
 - **동적 스타일 탐색**: 템플릿의 스타일 ID를 구조 분석으로 자동 인식 — 한컴오피스에서 템플릿을 수정해도 자동 대응
+- **기존 파일 읽기/수정**: 바이트 보존 방식으로 기존 HWPX 파일을 안전하게 편집 (v0.2.0+)
 - **완전한 서식 지원**: 그라데이션 제목바, 계층형 마커(□/ㅇ/-/*), 데이터 표, 부록 섹션
 - **이노베이션아카데미 표준 보고서 템플릿** 기본 포함
 - **JSON 기반 콘텐츠**: 간단한 JSON으로 문서 내용 정의
@@ -155,6 +156,7 @@ python scripts/generate_hwpx.py \
 HWPX-CLAUDE-SKILL/
 ├── SKILL.md              # Claude Skill 정의 (트리거 규칙, 형식 문서)
 ├── README.md             # 이 파일
+├── CHANGELOG.md          # 버전별 변경 이력
 ├── LICENSE               # GPL v3 라이선스
 ├── CITATION.cff          # 인용 메타데이터
 ├── .gitignore
@@ -162,9 +164,126 @@ HWPX-CLAUDE-SKILL/
 │   ├── template.hwpx     # 기본 템플릿 (이노베이션아카데미 표준 보고서)
 │   └── default_styles.json # 자동 생성된 스타일 캐시 (템플릿 해시 포함)
 ├── scripts/
-│   └── generate_hwpx.py  # 메인 생성 스크립트 (Python)
+│   ├── __init__.py       # 패키지 초기화
+│   ├── generate_hwpx.py  # 새 문서 생성 (JSON → HWPX)
+│   ├── _parser.py        # 공유 XML 파서 (깊이 추적, CDATA/주석 안전)
+│   ├── read_hwpx.py      # 기존 HWPX 읽기 및 구조 분석
+│   ├── modify_hwpx.py    # 바이트 보존 편집 (텍스트/문단/행 수정)
+│   ├── xml_templates.py  # 원본 XML에서 템플릿 추출 및 렌더링
+│   ├── table_fixer.py    # 테이블 정합성 자동 검증/수정 (colSpan 지원)
+│   └── zip_handler.py    # 압축모드 보존 ZIP 핸들러
 └── examples/
     └── sample_report.json # 예제 설정 파일
+```
+
+## 기존 HWPX 파일 편집 / Editing Existing HWPX Files (v0.2.0+)
+
+새 문서 생성뿐 아니라, 기존 HWPX 파일을 열어서 분석하고 수정할 수 있습니다.
+
+In addition to creating new documents, you can open, analyze, and modify existing HWPX files.
+
+### 사용 예시 / Usage Example
+
+```python
+from scripts.read_hwpx import open_hwpx
+from scripts.modify_hwpx import replace_text, insert_paragraph_after, update_section
+from scripts.table_fixer import fix_all_tables
+
+# 기존 파일 열기 / Open existing file
+doc = open_hwpx('report.hwpx')
+print(doc.list_sections())     # ['Contents/section0.xml', ...]
+print(doc.list_tables())       # [{'section': ..., 'rowCnt': 3, 'colCnt': 4, ...}]
+
+# 텍스트 치환 / Replace text
+section_xml = doc.get_section_text('Contents/section1.xml')
+modified = replace_text(section_xml, '2025년', '2026년')
+
+# 문단 삽입 / Insert paragraph
+new_para = '<hp:p paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>새 문단</hp:t></hp:run></hp:p>'
+modified = insert_paragraph_after(modified, 0, new_para)
+
+# 섹션 수정 후 저장 / Save modified section
+update_section('report.hwpx', 'Contents/section1.xml',
+               lambda xml: replace_text(xml, 'old', 'new'),
+               output_path='modified_report.hwpx')
+```
+
+### 핵심 모듈 / Core Modules
+
+| 모듈 | 용도 | 주요 함수 |
+|------|------|-----------|
+| `read_hwpx.py` | 구조 분석 (읽기 전용) | `open_hwpx()`, `list_tables()`, `get_styles()` |
+| `modify_hwpx.py` | 바이트 보존 편집 | `replace_text()`, `insert_paragraph_after()`, `update_section()` |
+| `xml_templates.py` | 템플릿 추출/렌더링 | `extract_paragraph_template()`, `render_table_row()` |
+| `table_fixer.py` | 테이블 정합성 수정 | `validate_table()`, `fix_table()`, `fix_all_tables()` |
+| `zip_handler.py` | ZIP 압축모드 보존 | `read_hwpx_zip()`, `write_hwpx_zip()` |
+| `_parser.py` | 공유 XML 파서 | `find_top_level_paragraphs()`, `find_direct_cells()` |
+
+### 바이트 보존 아키텍처 / Byte-Preserving Architecture
+
+HWPX 편집의 핵심 제약: **`etree.tostring()` 절대 사용 금지**.
+
+The critical constraint for HWPX editing: **never use `etree.tostring()`**.
+
+한컴오피스는 원본 XML의 바이트 수준 무결성을 검증합니다. lxml/etree 등의 XML 파서가 들여쓰기, 속성 순서, 공백 등을 변경하면 파일이 손상된 것으로 감지됩니다. 따라서 모든 수정은 원본 XML 바이트에 `str.replace()` 또는 정규식으로 직접 수행합니다.
+
+Hancom Office verifies byte-level XML integrity. If any XML parser (lxml, etree) reformats indentation, attribute order, or whitespace, the file is detected as corrupted. All modifications are performed directly on the original XML bytes using `str.replace()` or regex.
+
+```
+┌─────────────────┐     ┌──────────────────┐
+│  zip_handler.py │────→│  read_hwpx.py    │──→ 구조 분석 (analysis)
+│  (ZIP 압축모드   │     │  (etree 분석만,  │
+│   보존)          │     │   tostring 금지) │
+└────────┬────────┘     └──────────────────┘
+         │
+         └─────────────→│  modify_hwpx.py  │──→ 바이트 수술 (byte surgery)
+                        │  (str.replace &  │
+                        │   regex only)    │
+                        └────────┬─────────┘
+                                 │
+                   ┌─────────────┼─────────────┐
+                   ▼             ▼             ▼
+           ┌────────────┐ ┌────────────┐ ┌────────────┐
+           │xml_templates│ │table_fixer │ │_parser.py  │
+           │.py          │ │.py         │ │(깊이 추적   │
+           │(패턴 추출)   │ │(rowCnt,    │ │ CDATA 안전) │
+           └────────────┘ │cellAddr,   │ └────────────┘
+                          │colSpan 수정)│
+                          └────────────┘
+```
+
+### 무결성 규칙 / Integrity Rules
+
+이 모듈들은 개발 과정에서 발견된 실패 사례를 바탕으로 다음 규칙을 엄격히 준수합니다:
+
+These modules strictly follow integrity rules discovered through production failures:
+
+| 규칙 | 문제 | 해결 |
+|------|------|------|
+| **Rule 9**: XML 직렬화 금지 | `etree.tostring()`이 compact XML을 pretty-print로 변환 → 변조 감지 | 원본 바이트에 문자열 수술만 수행 |
+| **Rule 10**: 테이블 정합성 | rowCnt ≠ 실제 행 수이면 파일 오류 | `table_fixer.py`가 rowCnt, cellAddr, colSpan 자동 수정 |
+| **Rule 11**: ZIP 압축모드 | 엔트리별 compress_type 변경 시 무결성 실패 | `zip_handler.py`가 원본 compress_type 보존 |
+| **Rule 12**: 출력 검증 | 문자열 수술 후 XML 구조 오류 가능 | `update_section(validate=True)`로 수정 전후 검증 |
+| **Rule 13**: CDATA 안전 | 손상된 CDATA가 phantom 요소 생성 | 닫히지 않은 CDATA/주석은 나머지 전체 스킵 |
+
+### 병합 셀(colSpan) 지원 / Merged Cell Support (v0.3.0)
+
+`table_fixer.py`는 셀 병합(colSpan)이 적용된 테이블의 `colAddr`를 올바르게 계산합니다:
+
+`table_fixer.py` correctly computes `colAddr` for tables with column-spanning merged cells:
+
+```
+colCnt=3인 테이블:
+┌──────────────┬─────────┐
+│  병합 셀 A+B  │    C    │   ← Row 0: 2개 셀, 첫 셀 colSpan=2
+│  (colSpan=2) │         │
+├─────┬────────┼─────────┤
+│  A  │   B    │    C    │   ← Row 1: 3개 셀, 각각 colSpan=1
+└─────┴────────┴─────────┘
+
+cellAddr 계산:
+  Row 0: colAddr=0 (colSpan=2), colAddr=2 (colSpan=1)  ← 열 1을 건너뜀
+  Row 1: colAddr=0, colAddr=1, colAddr=2                ← 순차
 ```
 
 ## 작동 원리 / How It Works
@@ -221,6 +340,7 @@ HWPX-CLAUDE-SKILL/
 3. **시행착오**: 한컴오피스에서 생성된 파일의 유효성을 검증하는 반복 테스트
 4. **템플릿 접근**: 검증된 파일에서 `header.xml`을 복사하는 것이 처음부터 생성하는 것보다 훨씬 안정적이라는 것을 발견
 5. **구조적 탐색**: 텍스트 매칭 대신 XML 구조 마커(colPr, cellAddr, paraPr 정렬, charPr 글꼴명)를 사용하여 템플릿 변경에 강건한 스타일 탐색 구현
+6. **반복적 적대적 검토**: 각 버전의 코드를 자체 검토하여 가정을 찾고 실패 시나리오를 구성하는 방식으로 3라운드에 걸쳐 버그를 발견하고 수정 (v0.1.0 → v0.2.0 → v0.3.0)
 
 ## 라이선스 / License
 
@@ -233,7 +353,9 @@ HWPX-CLAUDE-SKILL/
 - 추가 콘텐츠 유형 (이미지, 차트, 각주)
 - 다양한 보고서 템플릿
 - linesegarray 계산 정밀도 향상
-- 테스트 케이스
+- 테스트 케이스 (특히 병합 셀이 있는 실제 문서 테스트)
+- rowSpan 지원 (현재 colSpan만 구현됨)
+- 한컴오피스 자동화 검증 (CLI 기반 외부 검증)
 
 ## 감사의 글 / Acknowledgments
 
