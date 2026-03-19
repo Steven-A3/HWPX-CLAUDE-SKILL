@@ -12,6 +12,7 @@ Safety:
     matching partial tag names (e.g. <hp:paraShape vs <hp:p)
 """
 
+import bisect
 import re
 from xml.etree import ElementTree as ET
 
@@ -73,6 +74,12 @@ def check_for_unclosed_constructs(xml_string):
         Empty list means no issues found.
     """
     issues = []
+    # closed_ranges: sorted list of (start, end) for properly closed
+    # CDATA/comment constructs — built in the first pass, reused in the
+    # second pass via bisect for O(log n) per-query lookup.
+    closed_ranges = []
+    # closed_starts: parallel list of start positions for bisect lookup.
+    closed_starts = []
     pos = 0
     xml_len = len(xml_string)
 
@@ -91,33 +98,38 @@ def check_for_unclosed_constructs(xml_string):
             if end == -1:
                 issues.append({'type': 'CDATA', 'position': cdata_pos})
                 break  # rest of string is inside unclosed CDATA
+            closed_ranges.append((cdata_pos, end + 3))
+            closed_starts.append(cdata_pos)
             pos = end + 3
         else:
             end = xml_string.find('-->', comment_pos + 4)
             if end == -1:
                 issues.append({'type': 'comment', 'position': comment_pos})
                 break  # rest of string is inside unclosed comment
+            closed_ranges.append((comment_pos, end + 3))
+            closed_starts.append(comment_pos)
             pos = end + 3
 
     # Second pass: detect partial/malformed openers that _skip_non_tag
     # does NOT recognise.  These are <![...  sequences that don't form a
-    # full <![CDATA[ opener, and <!- without a second -.
-    _PARTIAL_CDATA = re.compile(r'<!\[(?!CDATA\[)')
+    # full <![CDATA[ opener or a valid XML conditional section keyword
+    # (INCLUDE, IGNORE), and <!- without a second -.
+    _PARTIAL_CDATA = re.compile(r'<!\[(?!CDATA\[|INCLUDE\[|IGNORE\[)')
     _PARTIAL_COMMENT = re.compile(r'<!-(?!-)')
 
     for pattern, issue_type in [(_PARTIAL_CDATA, 'partial_CDATA'),
                                 (_PARTIAL_COMMENT, 'partial_comment')]:
         for m in pattern.finditer(xml_string):
             match_pos = m.start()
-            # Skip matches that fall inside a valid CDATA or comment
+            # Skip matches that fall inside an unclosed CDATA/comment
             inside = False
             for issue in issues:
                 if issue['type'] in ('CDATA', 'comment') and match_pos > issue['position']:
                     inside = True
                     break
             if not inside:
-                # Also skip if inside a properly closed CDATA/comment
-                if not _is_inside_closed_construct(xml_string, match_pos):
+                # O(log n) check against precomputed closed ranges
+                if not _is_inside_closed_ranges(closed_starts, closed_ranges, match_pos):
                     issues.append({'type': issue_type, 'position': match_pos})
 
     # Sort by position for deterministic output
@@ -125,36 +137,27 @@ def check_for_unclosed_constructs(xml_string):
     return issues
 
 
-def _is_inside_closed_construct(xml_string, target_pos):
-    """Check if target_pos falls inside a properly closed CDATA or comment."""
-    pos = 0
-    while pos < target_pos:
-        cdata_pos = xml_string.find('<![CDATA[', pos)
-        comment_pos = xml_string.find('<!--', pos)
+def _is_inside_closed_ranges(closed_starts, closed_ranges, target_pos):
+    """Check if target_pos falls inside any precomputed closed CDATA/comment range.
 
-        if cdata_pos == -1 and comment_pos == -1:
-            return False
+    Uses bisect for O(log n) lookup instead of rescanning the XML string.
 
-        if cdata_pos != -1 and (comment_pos == -1 or cdata_pos < comment_pos):
-            if cdata_pos > target_pos:
-                return False
-            end = xml_string.find(']]>', cdata_pos + 9)
-            if end == -1:
-                return cdata_pos < target_pos  # unclosed, target is inside
-            if cdata_pos < target_pos < end + 3:
-                return True
-            pos = end + 3
-        else:
-            if comment_pos > target_pos:
-                return False
-            end = xml_string.find('-->', comment_pos + 4)
-            if end == -1:
-                return comment_pos < target_pos
-            if comment_pos < target_pos < end + 3:
-                return True
-            pos = end + 3
+    Args:
+        closed_starts: Sorted list of start positions (parallel to closed_ranges).
+        closed_ranges: Sorted list of (start, end) tuples for closed constructs.
+        target_pos: Position to check.
 
-    return False
+    Returns:
+        True if target_pos is inside any closed range.
+    """
+    if not closed_starts:
+        return False
+    # Find the rightmost range whose start <= target_pos
+    idx = bisect.bisect_right(closed_starts, target_pos) - 1
+    if idx < 0:
+        return False
+    start, end = closed_ranges[idx]
+    return start <= target_pos < end
 
 
 # ============================================================================
@@ -214,14 +217,53 @@ def _skip_section_header(xml):
     already validates tag boundaries, but stripping the header eliminates
     any theoretical false match from namespace URIs.
 
+    The search skips over CDATA sections and XML comments so that a
+    ``<hs:sec`` inside a comment is not mistaken for the real header.
+    The closing ``>`` search is quote-aware so that ``>`` inside attribute
+    values (legal in XML) does not cause a premature split.
+
     Returns 0 (scan from the start) if ``<hs:sec`` is not found, so this
     is safe to call on any XML fragment.
     """
-    try:
-        sec_idx = xml.index('<hs:sec')
-        return xml.index('>', sec_idx) + 1
-    except ValueError:
-        return 0
+    xml_len = len(xml)
+    pos = 0
+    # Phase 1: find '<hs:sec' that is NOT inside a CDATA/comment
+    while pos < xml_len:
+        new_pos = _skip_non_tag(xml, pos)
+        if new_pos != pos:
+            pos = new_pos
+            continue
+        new_pos = _advance_to_lt(xml, pos, xml_len)
+        if new_pos != pos:
+            pos = new_pos
+            continue
+        if xml[pos:pos + 7] == '<hs:sec':
+            nc = pos + 7
+            if nc < xml_len and xml[nc] in (' ', '>'):
+                break  # found the real <hs:sec tag
+            pos = nc
+            continue
+        pos += 1
+    else:
+        return 0  # no <hs:sec found
+
+    # Phase 2: find the closing '>' of this opening tag, skipping
+    # '>' characters that appear inside quoted attribute values.
+    i = pos + 7  # skip past '<hs:sec'
+    while i < xml_len:
+        ch = xml[i]
+        if ch == '>':
+            return i + 1
+        if ch in ('"', "'"):
+            # Skip to matching close quote
+            close = xml.find(ch, i + 1)
+            if close == -1:
+                return 0  # malformed — unclosed quote, bail out
+            i = close + 1
+            continue
+        i += 1
+
+    return 0  # no closing '>' found
 
 
 def _advance_to_lt(xml, pos, xml_len):
