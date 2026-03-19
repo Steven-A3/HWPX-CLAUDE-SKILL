@@ -44,27 +44,40 @@ def validate_wellformed(xml_string):
 
 
 def check_for_unclosed_constructs(xml_string):
-    """Check for unclosed CDATA sections or XML comments in the string.
+    """Check for unclosed or malformed CDATA sections and XML comments.
 
-    When _skip_cdata() or _skip_comment() encounter an unclosed construct,
-    they skip to len(xml) — silently causing the parser to produce fewer
-    elements than expected. This function provides an explicit signal.
+    Detects two categories of problems:
 
-    Use this BEFORE parsing to detect truncation risk. If unclosed
-    constructs are found, the parse results may be incomplete.
+    1. **Unclosed constructs**: A valid ``<![CDATA[`` or ``<!--`` opener
+       with no matching closer.  The parser's ``_skip_cdata()`` /
+       ``_skip_comment()`` handle these safely (skip to end of string),
+       but they cause silent element loss.
+
+    2. **Partial/malformed openers**: Sequences like ``<![CDAT`` or
+       ``<!-`` that resemble CDATA/comment openers but are truncated or
+       corrupted.  The parser's ``_skip_non_tag()`` does NOT recognise
+       these — it treats them as ordinary ``<`` characters.  This is
+       harmless in well-formed XML but may indicate file corruption.
+
+    Use this BEFORE parsing to detect truncation risk.  If issues are
+    found, the parse results may be incomplete or unreliable.
 
     Args:
         xml_string: Raw XML string to check.
 
     Returns:
-        List of dicts, each with 'type' ('CDATA' or 'comment') and
-        'position' (offset where the unclosed construct starts).
-        Empty list means no unclosed constructs found.
+        List of dicts with keys:
+          - 'type': 'CDATA', 'comment', 'partial_CDATA', or
+            'partial_comment'
+          - 'position': byte offset where the construct starts
+        Empty list means no issues found.
     """
     issues = []
     pos = 0
-    while pos < len(xml_string):
-        # Check for CDATA opener
+    xml_len = len(xml_string)
+
+    while pos < xml_len:
+        # Find earliest CDATA or comment opener
         cdata_pos = xml_string.find('<![CDATA[', pos)
         comment_pos = xml_string.find('<!--', pos)
 
@@ -86,7 +99,62 @@ def check_for_unclosed_constructs(xml_string):
                 break  # rest of string is inside unclosed comment
             pos = end + 3
 
+    # Second pass: detect partial/malformed openers that _skip_non_tag
+    # does NOT recognise.  These are <![...  sequences that don't form a
+    # full <![CDATA[ opener, and <!- without a second -.
+    _PARTIAL_CDATA = re.compile(r'<!\[(?!CDATA\[)')
+    _PARTIAL_COMMENT = re.compile(r'<!-(?!-)')
+
+    for pattern, issue_type in [(_PARTIAL_CDATA, 'partial_CDATA'),
+                                (_PARTIAL_COMMENT, 'partial_comment')]:
+        for m in pattern.finditer(xml_string):
+            match_pos = m.start()
+            # Skip matches that fall inside a valid CDATA or comment
+            inside = False
+            for issue in issues:
+                if issue['type'] in ('CDATA', 'comment') and match_pos > issue['position']:
+                    inside = True
+                    break
+            if not inside:
+                # Also skip if inside a properly closed CDATA/comment
+                if not _is_inside_closed_construct(xml_string, match_pos):
+                    issues.append({'type': issue_type, 'position': match_pos})
+
+    # Sort by position for deterministic output
+    issues.sort(key=lambda x: x['position'])
     return issues
+
+
+def _is_inside_closed_construct(xml_string, target_pos):
+    """Check if target_pos falls inside a properly closed CDATA or comment."""
+    pos = 0
+    while pos < target_pos:
+        cdata_pos = xml_string.find('<![CDATA[', pos)
+        comment_pos = xml_string.find('<!--', pos)
+
+        if cdata_pos == -1 and comment_pos == -1:
+            return False
+
+        if cdata_pos != -1 and (comment_pos == -1 or cdata_pos < comment_pos):
+            if cdata_pos > target_pos:
+                return False
+            end = xml_string.find(']]>', cdata_pos + 9)
+            if end == -1:
+                return cdata_pos < target_pos  # unclosed, target is inside
+            if cdata_pos < target_pos < end + 3:
+                return True
+            pos = end + 3
+        else:
+            if comment_pos > target_pos:
+                return False
+            end = xml_string.find('-->', comment_pos + 4)
+            if end == -1:
+                return comment_pos < target_pos
+            if comment_pos < target_pos < end + 3:
+                return True
+            pos = end + 3
+
+    return False
 
 
 # ============================================================================
@@ -137,6 +205,25 @@ def _skip_non_tag(xml, pos):
     return _skip_comment(xml, pos)
 
 
+def _skip_section_header(xml):
+    """Return byte offset past the ``<hs:sec ...>`` header, or 0 if absent.
+
+    Scanning the section header is unnecessary — it contains only namespace
+    declarations and attributes, never child elements like ``<hp:p>`` or
+    ``<hp:tbl>``.  Skipping it is defense-in-depth: ``_find_elements``
+    already validates tag boundaries, but stripping the header eliminates
+    any theoretical false match from namespace URIs.
+
+    Returns 0 (scan from the start) if ``<hs:sec`` is not found, so this
+    is safe to call on any XML fragment.
+    """
+    try:
+        sec_idx = xml.index('<hs:sec')
+        return xml.index('>', sec_idx) + 1
+    except ValueError:
+        return 0
+
+
 def _advance_to_lt(xml, pos, xml_len):
     """If pos is not at '<', jump forward to the next '<' via str.find().
 
@@ -156,27 +243,42 @@ def find_top_level_paragraphs(section_xml):
     Uses depth tracking to correctly skip nested <hp:p> inside table cells.
     Skips CDATA sections and XML comments.
 
+    Automatically skips past the ``<hs:sec ...>`` header (if present) so
+    the search is scoped to the section body.  Returned offsets are
+    relative to the original ``section_xml`` string.
+
     Args:
-        section_xml: Raw XML string.
+        section_xml: Raw XML string (full section or body fragment).
 
     Returns:
         List of (start, end) tuples — byte offsets into section_xml.
     """
-    return _find_elements(section_xml, '<hp:p', '</hp:p>')
+    body_start = _skip_section_header(section_xml)
+    body = section_xml[body_start:]
+    return [(s + body_start, e + body_start)
+            for s, e in _find_elements(body, '<hp:p', '</hp:p>')]
 
 
 def find_tables(section_xml):
     """Find all top-level <hp:tbl> elements in section XML.
 
+    Automatically skips past the ``<hs:sec ...>`` header (if present) so
+    the search is scoped to the section body.  Returned offsets are
+    relative to the original ``section_xml`` string, so callers can use
+    them directly for substring replacement.
+
     Args:
-        section_xml: Raw XML string.
+        section_xml: Raw XML string (full section or body fragment).
 
     Returns:
-        List of (start, end, xml) tuples.
+        List of (start, end, xml) tuples where start/end are byte offsets
+        into section_xml and xml is section_xml[start:end].
     """
+    body_start = _skip_section_header(section_xml)
+    body = section_xml[body_start:]
     results = []
-    for start, end in _find_elements(section_xml, '<hp:tbl', '</hp:tbl>'):
-        results.append((start, end, section_xml[start:end]))
+    for s, e in _find_elements(body, '<hp:tbl', '</hp:tbl>'):
+        results.append((s + body_start, e + body_start, body[s:e]))
     return results
 
 
