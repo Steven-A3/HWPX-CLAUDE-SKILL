@@ -382,23 +382,36 @@ def _find_matching_close(xml, start, open_prefix, close_tag):
     """Find matching close tag from start position using depth tracking.
 
     Skips CDATA sections and XML comments.
+    Uses str.find() to jump between candidate positions instead of
+    scanning character-by-character, giving O(n * k) performance where
+    k is the number of tag occurrences rather than O(n) per character.
 
     Returns end offset (position after close_tag), or -1 if not found.
     """
     depth = 0
     prefix_len = len(open_prefix)
     close_len = len(close_tag)
+    xml_len = len(xml)
     i = start
 
-    while i < len(xml):
+    while i < xml_len:
         # Skip CDATA and comments
         new_i = _skip_non_tag(xml, i)
         if new_i != i:
             i = new_i
             continue
+
+        # Jump to the next '<' character — no tag can start without it
+        if xml[i] != '<':
+            next_lt = xml.find('<', i)
+            if next_lt == -1:
+                break
+            i = next_lt
+            continue
+
         if xml[i:i + prefix_len] == open_prefix:
             nc = i + prefix_len
-            if nc < len(xml) and xml[nc] in (' ', '>', '/'):
+            if nc < xml_len and xml[nc] in (' ', '>', '/'):
                 depth += 1
             i += prefix_len
             continue
