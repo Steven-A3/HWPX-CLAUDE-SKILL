@@ -1,5 +1,133 @@
 # CHANGELOG
 
+## [0.5.0] - 2026-03-20
+
+### Adversarial Self-Review Round 4: Three Fixes
+
+Fourth adversarial review of the v0.4.0 fixes revealed three remaining vulnerabilities
+in `_parser.py`. Each was proven with executable probes before the fix was applied.
+
+---
+
+### Fix 1: `_skip_section_header` Naive String Search — Two Failure Modes
+
+**Vulnerability**: `_skip_section_header()` used `xml.index('<hs:sec')` to find the
+section tag and `xml.index('>', sec_idx)` to find its closing bracket. This has two
+failure modes:
+
+- **`>` inside attribute values**: `>` is legal inside XML attribute values without
+  escaping. Given `<hs:sec attr="val>ue">`, the function splits at `val>` instead of
+  the real closing bracket. All downstream offsets from `find_tables()` and
+  `find_top_level_paragraphs()` are wrong — callers doing substring replacement
+  corrupt the XML.
+
+- **`<hs:sec` inside CDATA/comments**: `xml.index('<hs:sec')` finds the *first*
+  occurrence, including matches inside comments or CDATA. Given
+  `<!-- <hs:sec fake> --><hs:sec real>`, it matches the one inside the comment.
+
+**Proof (v0.4.0)**:
+```python
+xml = '<hs:sec attr="value>with>angles"><hp:p>hello</hp:p></hs:sec>'
+_skip_section_header(xml)
+# → offset=20, header='<hs:sec attr="value>'  ← WRONG, split inside attribute
+
+xml2 = '<!-- <hs:sec fake> --><hs:sec real><hp:p>hi</hp:p></hs:sec>'
+_skip_section_header(xml2)
+# → offset=19, header='<!-- <hs:sec fake>'    ← WRONG, matched inside comment
+```
+
+**Fix**: Rewrote `_skip_section_header()` in two phases:
+
+1. **Phase 1**: Walk forward using `_skip_non_tag()` and `_advance_to_lt()` to find
+   `<hs:sec` that is NOT inside a CDATA section or XML comment.
+2. **Phase 2**: Walk through the tag's attributes with quote tracking (`"` and `'`)
+   to find the real closing `>`, skipping `>` characters inside quoted values.
+
+**After fix**: Both failure scenarios return correct offsets. Normal case (no tricky
+attributes) is unaffected.
+
+**Files Changed**: `scripts/_parser.py` (`_skip_section_header`)
+
+---
+
+### Fix 2: Partial CDATA Regex False Positives on Valid XML Conditional Sections
+
+**Vulnerability**: `check_for_unclosed_constructs()` used the regex
+`r'<!\[(?!CDATA\[)'` to detect partial/malformed CDATA openers. This matches
+`<![INCLUDE[` and `<![IGNORE[` — valid XML DTD conditional sections defined in the
+XML specification. The function's docstring claimed these indicate "file corruption"
+when they are legitimate markup.
+
+**Proof (v0.4.0)**:
+```python
+xml = '<root><![INCLUDE[<hp:p>included</hp:p>]]></root>'
+check_for_unclosed_constructs(xml)
+# → [{'type': 'partial_CDATA', 'position': 6}]  ← FALSE POSITIVE
+```
+
+**Fix**: Updated the regex to `r'<!\[(?!CDATA\[|INCLUDE\[|IGNORE\[)'` — excludes
+the two standard XML conditional section keywords. Genuine corruption like `<![FOO`
+is still caught.
+
+**After fix**: `<![INCLUDE[` and `<![IGNORE[` produce no issues. `<![FOO` still
+produces `partial_CDATA`.
+
+**Files Changed**: `scripts/_parser.py` (`check_for_unclosed_constructs`)
+
+---
+
+### Fix 3: `_is_inside_closed_construct` O(n×m) Rescanning Replaced with O(n + m log n) Bisect
+
+**Vulnerability**: For each partial match found by the regex in the second pass,
+`_is_inside_closed_construct()` rescanned the entire XML string from position 0
+through every CDATA/comment to check if the match fell inside one. With `k` closed
+constructs and `m` partial matches, this is O(k × m) total work — quadratic.
+
+The irony: the first pass already walks every CDATA/comment and knows their
+positions. That information was discarded, then re-derived from scratch for every
+regex match.
+
+**Proof (v0.4.0)**:
+```python
+# 10k CDATAs + 10k partial openers
+many_cdata = ''.join(f'<![CDATA[data{i}]]>' for i in range(10000))
+many_partial = ''.join(f'<![FOO{i}]' for i in range(10000))
+check_for_unclosed_constructs(many_cdata + many_partial)
+# → O(n*m) — each partial triggers a full rescan from position 0
+```
+
+**Fix**: Three changes:
+
+1. The first pass now builds `closed_ranges` (sorted list of `(start, end)` tuples)
+   and `closed_starts` (parallel list of start positions) as it discovers each
+   properly closed CDATA/comment.
+
+2. Deleted `_is_inside_closed_construct()` entirely.
+
+3. Added `_is_inside_closed_ranges(closed_starts, closed_ranges, target_pos)` which
+   uses `bisect.bisect_right` for O(log n) per-query lookup against the precomputed
+   ranges.
+
+**After fix**: Total complexity is O(n + m log k) where n is string length, m is
+partial match count, and k is closed construct count. The 10k+10k benchmark runs
+in the same time envelope as before for small inputs, but scales correctly.
+
+**Files Changed**: `scripts/_parser.py` (`check_for_unclosed_constructs`, `_is_inside_closed_ranges`, removed `_is_inside_closed_construct`)
+
+---
+
+### Test Coverage Summary
+
+| Test Group | Count | Status |
+|---|---|---|
+| Fix 1: `_skip_section_header` (5 patterns: `>` in attrs, `<hs:sec` in comment, `<hs:sec` in CDATA, absent, normal) | 5 | ✅ new |
+| Fix 2: Conditional section exclusion (`INCLUDE`, `IGNORE`, genuine partial) | 3 | ✅ new |
+| Fix 3: Bisect correctness (partial inside/outside closed CDATA) + perf (10k+10k) | 3 | ✅ new |
+| Existing regression suite | 21 | ✅ pass |
+| **Total** | **32** | |
+
+---
+
 ## [0.4.0] - 2026-03-19
 
 ### Adversarial Self-Review Round 3: Three Fixes

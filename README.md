@@ -166,7 +166,7 @@ HWPX-CLAUDE-SKILL/
 ├── scripts/
 │   ├── __init__.py       # 패키지 초기화
 │   ├── generate_hwpx.py  # 새 문서 생성 (JSON → HWPX)
-│   ├── _parser.py        # 공유 XML 파서 (깊이 추적, CDATA/주석 안전)
+│   ├── _parser.py        # 공유 XML 파서 (깊이 추적, CDATA/주석 안전, 인용부호 인식, bisect 검증)
 │   ├── read_hwpx.py      # 기존 HWPX 읽기 및 구조 분석
 │   ├── modify_hwpx.py    # 바이트 보존 편집 (텍스트/문단/행 수정)
 │   ├── xml_templates.py  # 원본 XML에서 템플릿 추출 및 렌더링
@@ -217,7 +217,7 @@ update_section('report.hwpx', 'Contents/section1.xml',
 | `xml_templates.py` | 템플릿 추출/렌더링 | `extract_paragraph_template()`, `render_table_row()` |
 | `table_fixer.py` | 테이블 정합성 수정 | `validate_table()`, `fix_table()`, `fix_all_tables()` |
 | `zip_handler.py` | ZIP 압축모드 보존 | `read_hwpx_zip()`, `write_hwpx_zip()` |
-| `_parser.py` | 공유 XML 파서 | `find_top_level_paragraphs()`, `find_direct_cells()` |
+| `_parser.py` | 공유 XML 파서 (CDATA/주석 안전, 인용부호 인식, O(log n) 구조 검증) | `find_top_level_paragraphs()`, `find_direct_cells()`, `check_for_unclosed_constructs()` |
 
 ### 바이트 보존 아키텍처 / Byte-Preserving Architecture
 
@@ -244,12 +244,12 @@ Hancom Office verifies byte-level XML integrity. If any XML parser (lxml, etree)
                    ┌─────────────┼─────────────┐
                    ▼             ▼             ▼
            ┌────────────┐ ┌────────────┐ ┌────────────┐
-           │xml_templates│ │table_fixer │ │_parser.py  │
-           │.py          │ │.py         │ │(깊이 추적   │
-           │(패턴 추출)   │ │(rowCnt,    │ │ CDATA 안전) │
-           └────────────┘ │cellAddr,   │ └────────────┘
-                          │colSpan 수정)│
-                          └────────────┘
+           │xml_templates│ │table_fixer │ │_parser.py    │
+           │.py          │ │.py         │ │(깊이 추적     │
+           │(패턴 추출)   │ │(rowCnt,    │ │ CDATA 안전    │
+           └────────────┘ │cellAddr,   │ │ 인용부호 인식  │
+                          │colSpan 수정)│ │ bisect 검증)  │
+                          └────────────┘ └──────────────┘
 ```
 
 ### 무결성 규칙 / Integrity Rules
@@ -265,6 +265,8 @@ These modules strictly follow integrity rules discovered through production fail
 | **Rule 11**: ZIP 압축모드 | 엔트리별 compress_type 변경 시 무결성 실패 | `zip_handler.py`가 원본 compress_type 보존 |
 | **Rule 12**: 출력 검증 | 문자열 수술 후 XML 구조 오류 가능 | `update_section(validate=True)`로 수정 전후 검증 |
 | **Rule 13**: CDATA 안전 | 손상된 CDATA가 phantom 요소 생성 | 닫히지 않은 CDATA/주석은 나머지 전체 스킵 |
+| **Rule 14**: 섹션 헤더 파싱 | `<hs:sec>` 속성 값 내 `>`가 잘못된 분할 유발 | 인용부호 인식 파싱 + CDATA/주석 내 `<hs:sec` 무시 |
+| **Rule 15**: 구조 검증 성능 | 닫힌 CDATA/주석 내부 검사가 O(n×m) 재스캔 | 사전 계산된 범위 + bisect로 O(log n) 조회 |
 
 ### 병합 셀(colSpan) 지원 / Merged Cell Support (v0.3.0)
 
@@ -340,7 +342,7 @@ cellAddr 계산:
 3. **시행착오**: 한컴오피스에서 생성된 파일의 유효성을 검증하는 반복 테스트
 4. **템플릿 접근**: 검증된 파일에서 `header.xml`을 복사하는 것이 처음부터 생성하는 것보다 훨씬 안정적이라는 것을 발견
 5. **구조적 탐색**: 텍스트 매칭 대신 XML 구조 마커(colPr, cellAddr, paraPr 정렬, charPr 글꼴명)를 사용하여 템플릿 변경에 강건한 스타일 탐색 구현
-6. **반복적 적대적 검토**: 각 버전의 코드를 자체 검토하여 가정을 찾고 실패 시나리오를 구성하는 방식으로 3라운드에 걸쳐 버그를 발견하고 수정 (v0.1.0 → v0.2.0 → v0.3.0)
+6. **반복적 적대적 검토**: 각 버전의 코드를 자체 검토하여 가정을 찾고 실패 시나리오를 구성하는 방식으로 4라운드에 걸쳐 버그를 발견하고 수정 (v0.1.0 → v0.2.0 → v0.3.0 → v0.4.0 → v0.5.0)
 
 ## 라이선스 / License
 
@@ -354,8 +356,8 @@ cellAddr 계산:
 - 다양한 보고서 템플릿
 - linesegarray 계산 정밀도 향상
 - 테스트 케이스 (특히 병합 셀이 있는 실제 문서 테스트)
-- rowSpan 지원 (현재 colSpan만 구현됨)
 - 한컴오피스 자동화 검증 (CLI 기반 외부 검증)
+- 속성 값 내 특수문자를 포함하는 실제 HWPX 파일 테스트
 
 ## 감사의 글 / Acknowledgments
 
