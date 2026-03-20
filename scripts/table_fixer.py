@@ -170,12 +170,14 @@ def _extract_cell_addrs_by_row(table_xml):
     return all_row_addrs
 
 
-def _build_occupied_set(rows_addrs, row_idx):
-    """Build set of column indices occupied by rowSpan cells from previous rows.
+def _build_occupied_sets(rows_addrs):
+    """Build occupied column sets for ALL rows in a single forward pass.
 
-    Scans rows 0..row_idx-1 for cells with rowSpan > 1 that extend into
-    row_idx. For each such cell, all columns it spans (colAddr through
-    colAddr + colSpan - 1) are added to the occupied set.
+    Returns a list of sets, one per row.  Each set contains column indices
+    occupied by rowSpan cells from previous rows.
+
+    Complexity is O(R * C) overall — call this once and index the result
+    rather than computing per-row sets individually.
 
     Uses the *expected* colAddr (computed with the same occupation logic)
     rather than the XML's current colAddr, so this is self-consistent
@@ -184,41 +186,27 @@ def _build_occupied_set(rows_addrs, row_idx):
     Args:
         rows_addrs: Output of _extract_cell_addrs_by_row() — list of lists
             of 6-tuples (colAddr, rowAddr, colSpan, rowSpan, abs_start, abs_end).
-        row_idx: The row for which to compute occupied columns.
 
     Returns:
-        Set of integer column indices occupied by rowSpan cells from above.
+        List of sets, one per row. occupied_sets[i] is the set of column
+        indices occupied by rowSpan cells from rows before i.
     """
-    occupied = set()
-    # We need to compute the *correct* colAddr for previous rows too,
-    # since the XML values may be wrong. Build forward from row 0.
-    computed_addrs = []  # list of lists of (correct_colAddr, colSpan, rowSpan)
+    num_rows = len(rows_addrs)
+    occupied_sets = [set() for _ in range(num_rows)]
 
-    for prev_idx in range(row_idx):
-        prev_occupied = set()
-        for earlier_idx in range(prev_idx):
-            for correct_col, cs, rs in computed_addrs[earlier_idx]:
-                if rs > 1 and earlier_idx + rs > prev_idx:
-                    for c in range(correct_col, correct_col + cs):
-                        prev_occupied.add(c)
-
+    for prev_idx in range(num_rows):
+        occupied = occupied_sets[prev_idx]
         logical_col = 0
-        row_computed = []
         for _, _, col_span, row_span, _, _ in rows_addrs[prev_idx]:
-            while logical_col in prev_occupied:
+            while logical_col in occupied:
                 logical_col += 1
-            row_computed.append((logical_col, col_span, row_span))
+            if row_span > 1:
+                for future_row in range(prev_idx + 1, min(prev_idx + row_span, num_rows)):
+                    for c in range(logical_col, logical_col + col_span):
+                        occupied_sets[future_row].add(c)
             logical_col += col_span
-        computed_addrs.append(row_computed)
 
-    # Now compute occupied set for row_idx from computed previous rows
-    for prev_idx, row_computed in enumerate(computed_addrs):
-        for correct_col, cs, rs in row_computed:
-            if rs > 1 and prev_idx + rs > row_idx:
-                for c in range(correct_col, correct_col + cs):
-                    occupied.add(c)
-
-    return occupied
+    return occupied_sets
 
 
 def validate_table(table_xml):
@@ -248,8 +236,9 @@ def validate_table(table_xml):
 
     if col_cnt is not None:
         rows_addrs = _extract_cell_addrs_by_row(table_xml)
+        occupied_sets = _build_occupied_sets(rows_addrs)
         for row_idx, row_addrs in enumerate(rows_addrs):
-            occupied = _build_occupied_set(rows_addrs, row_idx)
+            occupied = occupied_sets[row_idx]
             logical_col = 0
             for col_addr, row_addr, col_span, row_span, _, _ in row_addrs:
                 # Skip columns occupied by rowSpan from above
@@ -314,10 +303,11 @@ def fix_table(table_xml):
 
     # Fix cellAddr values — use colSpan and rowSpan for grid positions
     rows_addrs = _extract_cell_addrs_by_row(result)
+    occupied_sets = _build_occupied_sets(rows_addrs)
     corrections = []
 
     for row_idx, row_addrs in enumerate(rows_addrs):
-        occupied = _build_occupied_set(rows_addrs, row_idx)
+        occupied = occupied_sets[row_idx]
         logical_col = 0
         for old_col, old_row, col_span, row_span, start, end in row_addrs:
             # Skip columns occupied by rowSpan from above

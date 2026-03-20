@@ -28,6 +28,8 @@ from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 from xml.etree import ElementTree as ET
 
+from . import _parser
+
 # ============================================================================
 # Constants
 # ============================================================================
@@ -372,53 +374,20 @@ def _extract_all_top_level_paragraphs(section_xml):
     """Extract ALL top-level paragraphs from section XML.
 
     Returns (paragraphs, section_header) where paragraphs is a list of
-    raw XML strings and section_header is the opening tag.
+    raw XML strings and section_header is the ``<hs:sec ...>`` opening tag
+    (including any ``<?xml ...?>`` declaration preceding it).
+
+    Delegates to _parser.find_top_level_paragraphs() which handles
+    CDATA sections, XML comments, partial tag name matching, and
+    section-header skipping automatically.
     """
     try:
         sec_idx = section_xml.index('<hs:sec')
         sec_close = section_xml.index('>', sec_idx) + 1
         section_header = section_xml[:sec_close]
-        body = section_xml[sec_close:]
 
-        paragraphs = []
-        pos = 0
-        open_tag = '<hp:p'
-        close_tag = '</hp:p>'
-
-        while pos < len(body):
-            try:
-                start = body.index(open_tag, pos)
-            except ValueError:
-                break
-            # Verify it's <hp:p followed by space or >
-            next_char_idx = start + len(open_tag)
-            if next_char_idx < len(body) and body[next_char_idx] not in (' ', '>', '/'):
-                pos = next_char_idx
-                continue
-
-            depth = 0
-            i = start
-            end = -1
-            while i < len(body):
-                if body[i:i + len(open_tag)] == open_tag:
-                    nc = i + len(open_tag)
-                    if nc < len(body) and body[nc] in (' ', '>', '/'):
-                        depth += 1
-                    i += len(open_tag)
-                    continue
-                if body[i:i + len(close_tag)] == close_tag:
-                    depth -= 1
-                    if depth == 0:
-                        end = i + len(close_tag)
-                        break
-                    i += len(close_tag)
-                    continue
-                i += 1
-
-            if end == -1:
-                break
-            paragraphs.append(body[start:end])
-            pos = end
+        spans = _parser.find_top_level_paragraphs(section_xml)
+        paragraphs = [section_xml[start:end] for start, end in spans]
 
         return paragraphs, section_header
     except (ValueError, IndexError):

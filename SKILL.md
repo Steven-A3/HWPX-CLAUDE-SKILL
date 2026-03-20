@@ -171,16 +171,18 @@ These rules were discovered through production failures where generated files we
 - **Formula**: `rowCnt = len(tr_elements)`, `rowAddr = row_idx` (0-based)
 - **colAddr Formula**: 셀 병합(colSpan)과 행 병합(rowSpan)을 모두 고려한 논리적 그리드 위치 계산:
   ```
-  # 1단계: 이전 행의 rowSpan이 현재 행을 점유하는 열 계산
-  occupied = _build_occupied_set(rows_addrs, row_idx)
+  # 1단계: 모든 행의 rowSpan 점유 열을 한 번에 계산 (O(R*C))
+  occupied_sets = _build_occupied_sets(rows_addrs)
 
-  # 2단계: 점유된 열을 건너뛰며 colAddr 할당
-  logical_col = 0
-  for cell in row:
-      while logical_col in occupied:
-          logical_col += 1   # rowSpan으로 점유된 열 건너뜀
-      cell.colAddr = logical_col
-      logical_col += cell.colSpan   # colSpan>1이면 병합 열 건너뜀
+  # 2단계: 각 행에서 점유된 열을 건너뛰며 colAddr 할당
+  for row_idx, row in enumerate(rows):
+      occupied = occupied_sets[row_idx]
+      logical_col = 0
+      for cell in row:
+          while logical_col in occupied:
+              logical_col += 1   # rowSpan으로 점유된 열 건너뜀
+          cell.colAddr = logical_col
+          logical_col += cell.colSpan   # colSpan>1이면 병합 열 건너뜀
   ```
 - **colSpan Example**: colCnt=3, Row 0에 colSpan=2 셀 + 일반 셀 → colAddr=0, colAddr=2 (1을 건너뜀)
 - **rowSpan Example**: colCnt=3, Row 0의 첫 셀이 rowSpan=2 → Row 1의 셀들은 colAddr=1부터 시작 (col 0은 점유됨)
