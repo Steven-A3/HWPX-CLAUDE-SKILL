@@ -1,0 +1,250 @@
+{
+    "title": "2026년 상반기 AI 프로젝트 종합 추진현황 보고",
+    "date": "26.03.26.",
+    "department": "AI혁신추진단",
+    "include_cover": false,
+    "sections": [
+        {
+            "type": "body",
+            "title_bar": "AI 프로젝트 종합 추진현황 보고",
+            "content": [
+                {"type": "heading", "text": "1. 프로젝트 개요"},
+                {"type": "bullet", "text": "AI 기반 문서 자동화 시스템 개발 프로젝트는 2026년 1월부터 시작되어 현재 3개월째 진행 중이며, 총 6개 세부 과제로 구성되어 있음"},
+                {"type": "dash", "text": "프로젝트 총 예산: 15억원 (1차년도 8억원, 2차년도 7억원)"},
+                {"type": "dash", "text": "투입 인력: 전담 12명, 겸임 8명 (총 20명)"},
+                {"type": "dash", "text": "주관 부서: AI혁신추진단, 협력 부서: 전략기획팀, IT인프라팀, 데이터분석팀"},
+                {"type": "star", "text": "프로젝트 관리 체계: PMO 운영, 주간 보고, 월간 점검회의"},
+
+                {"type": "heading", "text": "2. 세부 과제별 추진 현황"},
+                {"type": "bullet", "text": "과제 1: HWPX 문서 자동 생성 엔진 개발"},
+                {"type": "dash", "text": "한글(HWPX) 파일 포맷 역공학 분석 완료 (ZIP+XML 구조, OWPML 표준)"},
+                {"type": "dash", "text": "이노베이션아카데미 표준보고서 양식 기반 템플릿 엔진 설계 및 구현"},
+                {"type": "dash", "text": "서식이 포함된 정부 보고서 양식 자동 생성 기능 개발 완료"},
+                {"type": "dash", "text": "표(테이블), 제목, 본문, 각주 등 다양한 문서 요소 지원"},
+                {"type": "star", "text": "한컴오피스 호환성 검증 완료 (v12.30 기준, Windows/Mac 동시 지원)"},
+                {"type": "star", "text": "바이트 보존 수정 방식으로 원본 XML 무결성 유지"},
+
+                {"type": "bullet", "text": "과제 2: AI 기반 문서 내용 자동 생성 시스템"},
+                {"type": "dash", "text": "대규모 언어모델(LLM) 기반 보고서 초안 자동 작성 기능 개발"},
+                {"type": "dash", "text": "부서별 업무 데이터 연동을 통한 실적 자동 집계 모듈 구현"},
+                {"type": "dash", "text": "자연어 처리(NLP) 기반 문서 요약 및 핵심 키워드 추출 기능"},
+                {"type": "star", "text": "GPT-4급 모델 활용 시 보고서 초안 품질 85% 이상 달성"},
+
+                {"type": "bullet", "text": "과제 3: 문서 품질 자동 검증 시스템"},
+                {"type": "dash", "text": "맞춤법/문법 자동 교정 엔진 개발 (국립국어원 표준 기반)"},
+                {"type": "dash", "text": "문서 서식 일관성 자동 검증 도구 구현"},
+                {"type": "dash", "text": "정부 보고서 작성 가이드라인 준수 여부 자동 체크"},
+                {"type": "star", "text": "검증 정확도 92% 달성 (목표 90%)"},
+
+                {"type": "table", "caption": "세부 과제별 추진 실적 요약",
+                 "headers": ["과제명", "진척률", "상태", "비고"],
+                 "rows": [
+                     ["HWPX 자동 생성", "95%", "정상", "3월 완료 예정"],
+                     ["AI 내용 생성", "70%", "정상", "6월 완료 예정"],
+                     ["품질 검증", "60%", "주의", "인력 보강 필요"],
+                     ["데이터 연동", "45%", "정상", "4월 착수"],
+                     ["UI/UX 개발", "30%", "정상", "5월 본격화"],
+                     ["통합 테스트", "10%", "대기", "6월 예정"]
+                 ]
+                },
+
+                {"type": "heading", "text": "3. 인력 운영 현황"},
+                {"type": "bullet", "text": "전담 인력 12명 중 10명은 개발 업무, 2명은 기획/관리 업무 수행"},
+                {"type": "dash", "text": "백엔드 개발: 4명 (문서 생성 엔진, API 서버, DB 설계)"},
+                {"type": "dash", "text": "프론트엔드 개발: 3명 (웹 인터페이스, 미리보기, 편집기)"},
+                {"type": "dash", "text": "AI/ML 엔진: 3명 (LLM 파인튜닝, NLP 모듈, 품질 검증)"},
+                {"type": "dash", "text": "기획/PM: 2명 (요구사항 분석, 일정 관리, 품질 관리)"},
+                {"type": "star", "text": "겸임 인력 8명은 주 2일 투입 (IT인프라 3명, 데이터분석 3명, 보안 2명)"},
+
+                {"type": "bullet", "text": "인력 관련 이슈 및 대응 방안"},
+                {"type": "dash", "text": "AI/ML 전문 인력 1명 추가 확보 필요 (4월 중 채용 예정)"},
+                {"type": "dash", "text": "프론트엔드 개발자 1명 타 프로젝트 겸임으로 투입률 감소 → 5월부터 전담 전환 협의 중"},
+
+                {"type": "heading", "text": "4. 예산 집행 현황"},
+                {"type": "bullet", "text": "1차년도 총 예산 8억원 중 3.2억원 집행 (집행률 40%)"},
+                {"type": "dash", "text": "인건비: 2.1억원 (65.6%)"},
+                {"type": "dash", "text": "장비/인프라: 0.6억원 (18.8%)"},
+                {"type": "dash", "text": "외주/용역: 0.3억원 (9.4%)"},
+                {"type": "dash", "text": "교육/출장: 0.2억원 (6.3%)"},
+
+                {"type": "table", "caption": "월별 예산 집행 현황 (단위: 백만원)",
+                 "headers": ["구분", "1월", "2월", "3월", "합계"],
+                 "rows": [
+                     ["인건비", "65", "72", "73", "210"],
+                     ["장비/인프라", "40", "15", "5", "60"],
+                     ["외주/용역", "0", "10", "20", "30"],
+                     ["교육/출장", "5", "8", "7", "20"],
+                     ["합계", "110", "105", "105", "320"]
+                 ]
+                },
+
+                {"type": "heading", "text": "5. 주요 성과 및 산출물"},
+                {"type": "bullet", "text": "HWPX 문서 자동 생성 엔진 v1.0 출시"},
+                {"type": "dash", "text": "정부 표준 보고서 양식 5종 자동 생성 지원"},
+                {"type": "dash", "text": "표, 제목바, 본문, 각주, 부록 등 주요 문서 요소 완전 지원"},
+                {"type": "dash", "text": "평균 생성 시간: 0.3초 (A4 10페이지 기준)"},
+                {"type": "star", "text": "한컴오피스 v12.0 이상 완전 호환 확인"},
+
+                {"type": "bullet", "text": "AI 보고서 초안 생성 시스템 베타 버전 공개"},
+                {"type": "dash", "text": "업무 키워드 입력 시 보고서 구조 자동 제안 기능"},
+                {"type": "dash", "text": "과거 보고서 학습 기반 유사 문서 템플릿 추천"},
+                {"type": "dash", "text": "생성된 초안의 사용자 만족도: 4.2/5.0 (베타 테스터 50명 대상)"},
+
+                {"type": "bullet", "text": "문서 품질 검증 도구 알파 버전 완성"},
+                {"type": "dash", "text": "맞춤법 검증 정확도: 96% (한국어 표준어 기준)"},
+                {"type": "dash", "text": "서식 일관성 검증: 표, 들여쓰기, 글꼴 크기 등 12개 항목 자동 체크"},
+
+                {"type": "heading", "text": "6. 리스크 관리"},
+                {"type": "bullet", "text": "식별된 리스크 및 대응 현황"},
+                {"type": "dash", "text": "[높음] 한컴오피스 버전 업데이트 시 호환성 이슈 발생 가능 → 버전별 회귀 테스트 자동화 구축"},
+                {"type": "dash", "text": "[중간] AI 모델 학습 데이터 부족 → 부서별 보고서 아카이브 수집 확대 (현재 3,200건 → 목표 10,000건)"},
+                {"type": "dash", "text": "[중간] 보안 인증 지연 가능성 → 조기 보안 점검 착수 (4월 중)"},
+                {"type": "dash", "text": "[낮음] 클라우드 인프라 비용 초과 → 월별 비용 모니터링 및 예산 재배분 계획 수립"},
+                {"type": "star", "text": "리스크 관리 회의: 격주 화요일 14시, 리스크 관리 대장 실시간 업데이트"},
+
+                {"type": "table", "caption": "리스크 현황 요약",
+                 "headers": ["위험도", "건수", "대응 완료", "진행 중"],
+                 "rows": [
+                     ["높음", "2", "1", "1"],
+                     ["중간", "5", "3", "2"],
+                     ["낮음", "3", "3", "0"],
+                     ["합계", "10", "7", "3"]
+                 ]
+                },
+
+                {"type": "heading", "text": "7. 외부 협력 및 기술 교류"},
+                {"type": "bullet", "text": "한컴 기술 협력 MOU 체결 (2026.02.15.)"},
+                {"type": "dash", "text": "HWPX 포맷 기술 문서 제공 및 호환성 테스트 지원"},
+                {"type": "dash", "text": "향후 HWPX 표준 확장 시 사전 협의 채널 확보"},
+
+                {"type": "bullet", "text": "국내외 AI 문서 자동화 기술 동향 조사"},
+                {"type": "dash", "text": "Microsoft Copilot 문서 생성 기능 벤치마크 분석 완료"},
+                {"type": "dash", "text": "Google Workspace AI 기능 비교 분석 보고서 작성"},
+                {"type": "dash", "text": "국내 AI 스타트업 3곳과 기술 교류 미팅 진행 (자연어 처리, 문서 레이아웃 분석)"},
+
+                {"type": "bullet", "text": "학술 연구 협력"},
+                {"type": "dash", "text": "서울대학교 자연어처리연구실과 공동 연구 MOU 체결"},
+                {"type": "dash", "text": "한국어 보고서 생성 모델 관련 논문 1건 학회 제출 예정 (KSC 2026)"},
+
+                {"type": "heading", "text": "8. 2분기 추진 계획"},
+                {"type": "bullet", "text": "4월: 데이터 연동 모듈 개발 착수 및 AI 모델 고도화"},
+                {"type": "dash", "text": "부서별 업무 시스템 API 연동 설계 및 개발"},
+                {"type": "dash", "text": "보고서 생성 모델 v2.0 파인튜닝 (데이터 10,000건 목표)"},
+                {"type": "dash", "text": "문서 품질 검증 도구 베타 출시"},
+
+                {"type": "bullet", "text": "5월: UI/UX 개발 본격화 및 통합 테스트 준비"},
+                {"type": "dash", "text": "웹 기반 문서 편집기 프로토타입 개발"},
+                {"type": "dash", "text": "미리보기 기능 구현 (HWPX → PDF 변환)"},
+                {"type": "dash", "text": "통합 테스트 시나리오 설계 및 테스트 환경 구축"},
+
+                {"type": "bullet", "text": "6월: 통합 테스트 및 1차 릴리즈"},
+                {"type": "dash", "text": "전체 시스템 통합 테스트 (기능, 성능, 보안)"},
+                {"type": "dash", "text": "사용자 수용 테스트(UAT) 실시 (대상: 5개 부서 30명)"},
+                {"type": "dash", "text": "v1.0 정식 릴리즈 및 내부 배포"},
+                {"type": "star", "text": "릴리즈 일정: 2026년 6월 30일 (변경 시 사전 보고)"},
+
+                {"type": "table", "caption": "2분기 주요 마일스톤",
+                 "headers": ["시기", "마일스톤", "담당", "산출물"],
+                 "rows": [
+                     ["4월 2주", "API 연동 설계 완료", "백엔드팀", "설계 문서"],
+                     ["4월 4주", "AI 모델 v2.0", "AI팀", "모델 파일"],
+                     ["5월 2주", "편집기 프로토타입", "프론트팀", "데모 화면"],
+                     ["5월 4주", "테스트 환경 구축", "QA팀", "테스트 계획서"],
+                     ["6월 2주", "통합 테스트 완료", "전체", "테스트 결과서"],
+                     ["6월 4주", "v1.0 릴리즈", "전체", "릴리즈 노트"]
+                 ]
+                },
+
+                {"type": "heading", "text": "9. 건의 사항"},
+                {"type": "bullet", "text": "AI/ML 전문 인력 1명 추가 채용 승인 요청"},
+                {"type": "dash", "text": "현재 AI팀 3명으로는 모델 고도화와 품질 검증 시스템 동시 개발에 한계"},
+                {"type": "dash", "text": "4월 중 채용 시 6월 릴리즈 일정 준수 가능"},
+
+                {"type": "bullet", "text": "GPU 서버 추가 도입 건의"},
+                {"type": "dash", "text": "현재 GPU 서버 1대로 모델 학습 시간 과다 소요 (1회 학습 약 72시간)"},
+                {"type": "dash", "text": "GPU 서버 1대 추가 시 학습 시간 50% 단축 예상"},
+                {"type": "dash", "text": "예상 비용: 약 3,000만원 (1차년도 잔여 예산 내 집행 가능)"},
+
+                {"type": "bullet", "text": "보안 인증 조기 착수 요청"},
+                {"type": "dash", "text": "6월 릴리즈 전 보안 인증 완료 필요"},
+                {"type": "dash", "text": "인증 소요 기간 약 2개월 → 4월 초 착수 필요"},
+                {"type": "star", "text": "보안팀과 사전 협의 완료, 4월 1일 보안 점검 착수 예정"},
+
+                {"type": "note", "text": "편집용지 : 좌·우(20), 위(10)·아래(15), 머리말(15)·꼬리말(10), 줄간격(160%)"}
+            ]
+        },
+        {
+            "type": "appendix",
+            "title_bar": "참고1",
+            "appendix_title": "HWPX 포맷 기술 분석 상세 결과",
+            "content": [
+                {"type": "heading", "text": "HWPX 파일 구조 분석"},
+                {"type": "bullet", "text": "HWPX는 ZIP+XML 기반의 한글 문서 포맷으로 OWPML(KS X 6101) 표준을 따름"},
+                {"type": "dash", "text": "mimetype: 파일 식별 문자열 (STORED 압축)"},
+                {"type": "dash", "text": "META-INF/: container.xml, manifest.xml 등 메타데이터"},
+                {"type": "dash", "text": "Contents/: header.xml, section0.xml~sectionN.xml, content.hpf"},
+                {"type": "dash", "text": "BinData/: 이미지 등 바이너리 리소스"},
+                {"type": "dash", "text": "Preview/: 미리보기 이미지 및 텍스트"},
+
+                {"type": "heading", "text": "header.xml 구조 분석"},
+                {"type": "bullet", "text": "header.xml은 문서의 모든 스타일 정보를 관리하는 핵심 파일"},
+                {"type": "dash", "text": "fontfaces: 7개 언어별(HANGUL, LATIN, HANJA 등) 폰트 정의"},
+                {"type": "dash", "text": "charProperties: 글자 속성 (글꼴, 크기, 굵기, 밑줄 등)"},
+                {"type": "dash", "text": "paraProperties: 문단 속성 (정렬, 들여쓰기, 줄간격 등)"},
+                {"type": "dash", "text": "borderFills: 테두리/배경 채우기 스타일 정의"},
+                {"type": "dash", "text": "styles: 미리 정의된 스타일 셋 (바탕글, 제목, 본문 등)"},
+
+                {"type": "table", "caption": "charProperty 주요 속성",
+                 "headers": ["속성", "설명", "예시"],
+                 "rows": [
+                     ["height", "글자 크기 (HWPX 단위)", "1500 = 15pt"],
+                     ["fontRef", "폰트 참조 ID", "HANGUL=3 → 휴먼명조"],
+                     ["bold", "굵게 여부", "0 = 일반, 1 = 굵게"],
+                     ["italic", "기울임 여부", "0 = 일반, 1 = 기울임"],
+                     ["underline", "밑줄 유형", "NONE, BOTTOM 등"],
+                     ["color", "글자 색상", "#000000"]
+                 ]
+                },
+
+                {"type": "heading", "text": "section XML 구조 분석"},
+                {"type": "bullet", "text": "각 section은 독립적인 페이지 레이아웃과 콘텐츠를 포함"},
+                {"type": "dash", "text": "secPr: 페이지 크기, 여백, 머리말/꼬리말 설정"},
+                {"type": "dash", "text": "paragraph(hp:p): paraPrIDRef, styleIDRef로 스타일 참조"},
+                {"type": "dash", "text": "run(hp:run): charPrIDRef로 글자 속성 참조"},
+                {"type": "dash", "text": "linesegarray: 줄 배치 정보 (Hancom이 로드 시 재계산)"},
+                {"type": "dash", "text": "table(hp:tbl): rowCnt, colCnt 일치 필수, cellAddr 정합성 중요"},
+
+                {"type": "bullet", "text": "XML 무결성 관련 핵심 규칙"},
+                {"type": "dash", "text": "원본 XML의 compact 포맷 유지 필수 (pretty-print 금지)"},
+                {"type": "dash", "text": "etree.tostring() 사용 시 속성 순서 변경으로 파일 손상"},
+                {"type": "dash", "text": "ZIP 엔트리별 압축 방식(STORED/DEFLATED) 보존 필수"},
+
+                {"type": "table", "caption": "주요 스타일 매핑 현황",
+                 "headers": ["용도", "글꼴", "크기", "charPrID"],
+                 "rows": [
+                     ["제목바", "HY헤드라인M", "20pt", "1"],
+                     ["□ 마커", "HY헤드라인M", "15pt", "42"],
+                     ["ㅇ 본문", "휴먼명조", "15pt", "22"],
+                     ["- 세부", "휴먼명조", "15pt", "22"],
+                     ["* 상세", "맑은 고딕", "13pt", "71"],
+                     ["표 헤더", "맑은 고딕", "11pt", "35"],
+                     ["표 본문", "맑은 고딕", "12pt", "33"],
+                     ["날짜", "휴먼명조", "12pt", "27"]
+                 ]
+                },
+
+                {"type": "heading", "text": "lineseg 재계산 동작 확인"},
+                {"type": "bullet", "text": "실험: 동일 콘텐츠에 대해 3가지 lineseg 전략으로 HWPX 파일 생성"},
+                {"type": "dash", "text": "computed: 정확한 좌표 계산 (vertpos, textpos 등)"},
+                {"type": "dash", "text": "zero_vertpos: 모든 vertpos를 0으로 설정"},
+                {"type": "dash", "text": "minimal: 단일 고정값 lineseg (모든 속성 더미 값)"},
+
+                {"type": "bullet", "text": "결과: 세 파일 모두 한컴오피스에서 동일하게 표시됨"},
+                {"type": "dash", "text": "한컴오피스는 파일 로드 시 lineseg 좌표를 전면 재계산함"},
+                {"type": "dash", "text": "linesegarray 요소 자체는 필수이나, 내부 값은 무시됨"},
+                {"type": "dash", "text": "이 발견으로 문서 생성기에서 약 200줄의 좌표 계산 코드 제거 가능"},
+                {"type": "star", "text": "검증 일시: 2026.03.26., 검증 환경: Hancom Office v12.30 MAC"}
+            ]
+        }
+    ]
+}
