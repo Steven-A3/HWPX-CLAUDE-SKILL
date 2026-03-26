@@ -72,6 +72,9 @@ HORZSIZE_DEFAULT = 48188
 FLAGS_FIRST_LINE = 393216       # 0x60000 - first or only line
 FLAGS_CONTINUATION = 1441792    # 0x160000 - continuation line (2nd, 3rd, ...)
 
+# 6-point empty line between bullet level changes (□↔ㅇ)
+BULLET_TRANSITION_SPACER_HEIGHT = 600   # 6pt in HWPX units (100 units = 1pt)
+
 
 # ============================================================================
 # Text Width Estimation & Line Count
@@ -212,37 +215,37 @@ class VertPosTracker:
 # Default IDs (legacy fallback; auto-discovered from template at runtime)
 DEFAULT_STYLE_MAP = {
     # (charPrIDRef, paraPrIDRef, vertsize, textheight, baseline, spacing)
-    "heading_marker":   ("27", "28", 1500, 1500, 1275, 900),   # □ marker
-    "heading_text":     ("2",  "28", 1500, 1500, 1275, 900),   # HY헤드라인M 15pt
-    "heading_tail":     ("0",  "28", 1500, 1500, 1275, 900),   # trailing space
+    "heading_marker":   ("42", "26", 1500, 1500, 1275, 900),   # □ marker
+    "heading_text":     ("2",  "26", 1500, 1500, 1275, 900),   # HY헤드라인M 15pt
+    "heading_tail":     ("42", "26", 1500, 1500, 1275, 900),   # trailing space
     "heading_end":      ("29", "28", 1500, 1500, 1275, 900),   # closing run
-    "paragraph":        ("36", "19", 1500, 1500, 1275, 900),   # 휴먼명조 15pt
-    "paragraph_end":    ("38", "19", 1500, 1500, 1275, 900),
-    "bullet":           ("36", "19", 1500, 1500, 1275, 900),   # ㅇ bullet
-    "bullet_end":       ("38", "19", 1500, 1500, 1275, 900),
-    "dash":             ("36", "20", 1500, 1500, 1275, 900),   # - dash
-    "dash_end":         ("43", "20", 1500, 1500, 1275, 900),
-    "star":             ("57", "21", 1300, 1300, 1105, 780),   # * detail
-    "star_end":         ("48", "21", 1300, 1300, 1105, 780),
-    "note":             ("47", "24", 1400, 1400, 1190, 840),   # ▷ note
-    "table_caption":    ("17", "22", 1300, 1300, 1105, 780),   # < caption >
-    "table_wrapper":    ("9",  "22", 6710, 6710, 5704, 600),   # table container (base; overridden dynamically)
-    "table_header":     ("28", "25", 1200, 1200, 1020, 360),   # header cell
+    "paragraph":        ("22", "39", 1500, 1500, 1275, 900),   # 휴먼명조 15pt
+    "paragraph_end":    ("33", "39", 1500, 1500, 1275, 900),
+    "bullet":           ("22", "39", 1500, 1500, 1275, 900),   # ㅇ bullet
+    "bullet_end":       ("33", "39", 1500, 1500, 1275, 900),
+    "dash":             ("22", "18", 1500, 1500, 1275, 900),   # - dash
+    "dash_end":         ("22", "18", 1500, 1500, 1275, 900),
+    "star":             ("71", "48", 1300, 1300, 1105, 716),   # * detail
+    "star_end":         ("71", "48", 1300, 1300, 1105, 716),
+    "note":             ("22", "39", 1500, 1500, 1275, 900),   # ▷ note
+    "table_caption":    ("27", "16", 1200, 1200, 1020, 720),   # < caption >
+    "table_wrapper":    ("21", "22", 6104, 6104, 5188, 900),   # table container (base; overridden dynamically)
+    "table_header":     ("35", "29", 1100, 1100, 935,  360),   # header cell
     "table_body":       ("33", "25", 1200, 1200, 1020, 360),   # body cell
-    "title_bar_title":  ("1",  "15", 2000, 2000, 1700, 1800),  # title 20pt
-    "title_bar_top":    ("20", "3",  100,  100,  85,   60),    # gradient top
-    "title_bar_bottom": ("22", "3",  100,  100,  85,   60),    # gradient bottom
-    "date_line":        ("50", "17", 1200, 1200, 1020, 720),   # date
+    "title_bar_title":  ("1",  "23", 2000, 2000, 1700, 1800),  # title 20pt
+    "title_bar_top":    ("17", "3",  100,  100,  85,   60),    # gradient top
+    "title_bar_bottom": ("19", "3",  100,  100,  85,   60),    # gradient bottom
+    "date_line":        ("27", "16", 1200, 1200, 1020, 720),   # date
     "date_emphasis":    ("58", "17", 1200, 1200, 1020, 720),   # department
-    "spacer_small":     ("41", "19", 600,  600,  510,  360),   # small spacer
-    "spacer_medium":    ("39", "3",  800,  800,  680,  480),   # medium spacer
-    "first_para":       ("10", "17", 3603, 3603, 3063, 900),   # first para with bar
-    "appendix_tab":     ("8",  "18", 1600, 1600, 1360, 960),   # 참고N tab
-    "appendix_title":   ("3",  "16", 1600, 1600, 1360, 480),   # appendix title
-    "appendix_sep_char": ("6", "16", 1600, 1600, 1360, 480),   # separator space
-    "appendix_sep_cell": ("5", "3",  1550, 1550, 1318, 928),   # separator cell
-    "appendix_first":   ("10", "17", 2831, 2831, 2406, 300),   # appendix first para
-    "appendix_spacer":  ("40", "28", 1500, 1500, 1275, 900),
+    "spacer_small":     ("25", "25", 600,  600,  510,  360),   # small spacer
+    "spacer_medium":    ("32", "26", 600,  600,  510,  360),   # medium spacer
+    "first_para":       ("8",  "16", 1500, 1500, 1275, 900),   # first para with bar
+    "appendix_tab":     ("7",  "17", 1600, 1600, 1360, 960),   # 참고N tab
+    "appendix_title":   ("5",  "15", 1600, 1600, 1360, 480),   # appendix title
+    "appendix_sep_char": ("23","15", 1600, 1600, 1360, 480),   # separator space
+    "appendix_sep_cell": ("4", "3",  1550, 1550, 1317, 930),   # separator cell
+    "appendix_first":   ("23", "16", 2831, 2831, 2406, 300),   # appendix first para
+    "appendix_spacer":  ("25", "25", 1500, 1500, 1275, 900),   # charPr/paraPr from spacer_small
     # Cover page title area
     "cover_title":      ("25", "26", 2500, 2500, 2125, 1252),
     # Cover page date
@@ -250,11 +253,11 @@ DEFAULT_STYLE_MAP = {
     # Border fill IDs
     "bf_none":          "1",
     "bf_table":         "3",
-    "bf_gradient_top":  "14",
+    "bf_gradient_top":  "12",
     "bf_title_bg":      "9",
-    "bf_gradient_bot":  "15",
-    "bf_table_header":  "16",
-    "bf_appendix_tab":  "17",
+    "bf_gradient_bot":  "13",
+    "bf_table_header":  "30",
+    "bf_appendix_tab":  "14",
     "bf_appendix_sep":  "10",
     "bf_appendix_title": "11",
     "bf_cover_grad_top": "12",
@@ -902,13 +905,21 @@ def build_style_map_from_template(template_dir):
                                             cp, pp, h, h, int(h*0.85), int(h*0.3))
                                         break
 
-                # Appendix spacer: next paragraph after first_para
+                # Appendix spacer: next empty (non-table) paragraph after first_para.
+                # If the next paragraph contains a table, its lineseg metrics will
+                # reflect the table wrapper (e.g. vertsize=65974) — skip it and
+                # fall back to the body section's spacer_small (same visual role).
                 if app_first_idx is not None and app_first_idx + 1 < len(s2_attrs):
                     a = s2_attrs[app_first_idx + 1]
-                    sp_cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else '0'
-                    sm['appendix_spacer'] = _make_style_tuple(
-                        sp_cp, a['paraPrIDRef'], a['vertsize'],
-                        a['textheight'], a['baseline'], a['spacing'])
+                    if not a['has_tbl'] and not a['has_text']:
+                        sp_cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else '0'
+                        sm['appendix_spacer'] = _make_style_tuple(
+                            sp_cp, a['paraPrIDRef'], a['vertsize'],
+                            a['textheight'], a['baseline'], a['spacing'])
+                    elif 'spacer_small' in sm:
+                        ss = sm['spacer_small']
+                        sm['appendix_spacer'] = _make_style_tuple(
+                            ss[0], ss[1], 1500, 1500, 1275, 900)
 
             except Exception as e:
                 print(f"Warning: Could not parse appendix section: {e}")
@@ -925,20 +936,25 @@ def build_style_map_from_template(template_dir):
 # ============================================================================
 
 def parse_last_lineseg(paragraph_xml):
-    """Parse the last top-level <hp:lineseg> in a paragraph for layout values.
+    """Parse the last paragraph-level <hp:lineseg> for layout values.
 
-    Looks for lineseg entries that are direct children of the paragraph's
-    <hp:linesegarray>, not nested ones inside table cells.
+    Finds linesegs that belong to the paragraph itself, NOT those nested
+    inside table cells (<hp:tc>).  Works by stripping all <hp:tc>…</hp:tc>
+    blocks first, then searching the remaining XML.
 
-    Returns dict with vertpos, vertsize, textheight, baseline, spacing.
+    Note: For paragraphs that contain a table, the paragraph-level lineseg
+    will have a large vertsize reflecting the table wrapper height.  This is
+    correct (it IS the paragraph's own lineseg), but callers should check
+    has_tbl before using such values for style discovery.
+
+    Returns dict with textpos, vertpos, vertsize, textheight, baseline, spacing.
     Returns None if not found.
     """
-    # Find all lineseg elements (self-closing).  We want the LAST one
-    # in the paragraph — it belongs to the paragraph's own linesegarray
-    # (nested ones in table cells come earlier in the XML).
-    # Use attribute-order-independent matching so custom templates work.
+    # Strip table cell blocks so we only see paragraph-level linesegs.
+    stripped = re.sub(r'<hp:tc\b[^>]*>.*?</hp:tc>', '', paragraph_xml, flags=re.DOTALL)
+
     pattern = re.compile(r'<hp:lineseg\s+([^/]*/)')
-    matches = list(pattern.finditer(paragraph_xml))
+    matches = list(pattern.finditer(stripped))
     if not matches:
         return None
     attrs_str = matches[-1].group(1)
@@ -1511,6 +1527,31 @@ def data_table_xml(headers, rows, sm, caption="", table_id=1974981391):
     return paragraphs, wrapper_vertsize
 
 
+# Bullet-level types for transition spacer detection
+_LEVEL_SQUARE = {"heading"}   # □ level
+_LEVEL_CIRCLE = {"bullet"}    # ㅇ level (only items with the ㅇ marker)
+
+
+def _needs_bullet_transition_spacer(prev_type, curr_type):
+    """Return True when switching between □ and ㅇ bullet levels."""
+    if prev_type is None:
+        return False
+    return ((prev_type in _LEVEL_SQUARE and curr_type in _LEVEL_CIRCLE) or
+            (prev_type in _LEVEL_CIRCLE and curr_type in _LEVEL_SQUARE))
+
+
+def _bullet_transition_spacer_xml(sm, vpt):
+    """Generate a 6pt empty-line spacer for bullet level transitions."""
+    ss = sm["spacer_small"]
+    h = BULLET_TRANSITION_SPACER_HEIGHT
+    spacing = int(h * 0.6)
+    baseline = int(h * 0.85)
+    vp = vpt.next(h, spacing)
+    return paragraph_xml(ss[1], "0", run_xml(ss[0]),
+                         lineseg_xml(vertpos=vp, vertsize=h, textheight=h,
+                                     baseline=baseline, spacing=spacing))
+
+
 # ============================================================================
 # Content Item Generators (multi-line aware)
 # ============================================================================
@@ -1698,14 +1739,20 @@ def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref
                             vpt = seed_vpt_from_skeleton([p0, p1, p2])
 
                             content_xml = ""
+                            prev_type = None
                             for item in content_items:
-                                if item.get("type") == "heading":
+                                curr_type = item.get("type", "paragraph")
+                                has_transition = _needs_bullet_transition_spacer(prev_type, curr_type)
+                                if has_transition:
+                                    content_xml += _bullet_transition_spacer_xml(sm, vpt)
+                                if curr_type == "heading" and not has_transition:
                                     ss = sm["spacer_small"]
                                     vp = vpt.next(ss[2], ss[5])
                                     content_xml += paragraph_xml(ss[1], "0", run_xml(ss[0]),
                                         lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
                                                     baseline=ss[4], spacing=ss[5]))
                                 content_xml += generate_content_item(item, sm, vpt)
+                                prev_type = curr_type
 
                             return sec_header + p0 + p1 + p2 + content_xml + '</hs:sec>'
 
@@ -1748,14 +1795,20 @@ def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref
                                  lineseg_xml(vertpos=vp, vertsize=sp[2], textheight=sp[3],
                                              baseline=sp[4], spacing=sp[5]))
 
+    prev_type = None
     for item in content_items:
-        if item.get("type") == "heading":
+        curr_type = item.get("type", "paragraph")
+        has_transition = _needs_bullet_transition_spacer(prev_type, curr_type)
+        if has_transition:
+            paragraphs += _bullet_transition_spacer_xml(sm, vpt)
+        if curr_type == "heading" and not has_transition:
             ss = sm["spacer_small"]
             vp = vpt.next(ss[2], ss[5])
             paragraphs += paragraph_xml(ss[1], "0", run_xml(ss[0]),
                                          lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
                                                      baseline=ss[4], spacing=ss[5]))
         paragraphs += generate_content_item(item, sm, vpt)
+        prev_type = curr_type
 
     return f'<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hs:sec {NS_DECL}>{paragraphs}</hs:sec>'
 
@@ -1822,14 +1875,20 @@ def generate_appendix_section_xml(section_config, sm, template_dir=None, outline
                                                 baseline=asp[4], spacing=asp[5]))
 
                             content_xml = ""
+                            prev_type = None
                             for item in content_items:
-                                if item.get("type") == "heading":
+                                curr_type = item.get("type", "paragraph")
+                                has_transition = _needs_bullet_transition_spacer(prev_type, curr_type)
+                                if has_transition:
+                                    content_xml += _bullet_transition_spacer_xml(sm, vpt)
+                                if curr_type == "heading" and not has_transition:
                                     ss = sm["spacer_small"]
                                     vp = vpt.next(ss[2], ss[5])
                                     content_xml += paragraph_xml(ss[1], "0", run_xml(ss[0]),
                                         lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
                                                     baseline=ss[4], spacing=ss[5]))
                                 content_xml += generate_content_item(item, sm, vpt)
+                                prev_type = curr_type
 
                             result = sec_header + p0
                             if skeleton_spacer is not None:
@@ -1862,14 +1921,20 @@ def generate_appendix_section_xml(section_config, sm, template_dir=None, outline
                                  lineseg_xml(vertpos=vp, vertsize=asp[2], textheight=asp[3],
                                              baseline=asp[4], spacing=asp[5]))
 
+    prev_type = None
     for item in content_items:
-        if item.get("type") == "heading":
+        curr_type = item.get("type", "paragraph")
+        has_transition = _needs_bullet_transition_spacer(prev_type, curr_type)
+        if has_transition:
+            paragraphs += _bullet_transition_spacer_xml(sm, vpt)
+        if curr_type == "heading" and not has_transition:
             ss = sm["spacer_small"]
             vp = vpt.next(ss[2], ss[5])
             paragraphs += paragraph_xml(ss[1], "0", run_xml(ss[0]),
                                          lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
                                                      baseline=ss[4], spacing=ss[5]))
         paragraphs += generate_content_item(item, sm, vpt)
+        prev_type = curr_type
 
     return f'<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hs:sec {NS_DECL}>{paragraphs}</hs:sec>'
 
