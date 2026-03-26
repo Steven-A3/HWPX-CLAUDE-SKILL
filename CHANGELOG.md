@@ -1,5 +1,51 @@
 # CHANGELOG
 
+## [0.6.0] - 2026-03-26
+
+### Template Update & Adaptive Section Detection
+
+Updated `template.hwpx` to a new 2-section layout (body + appendix, no separate cover)
+and refactored all section detection logic to work with both old and new templates.
+
+---
+
+### New Template Structure
+
+- **Old template**: 3 sections — section0 (cover), section1 (body), section2 (appendix)
+- **New template**: 2 sections — section0 (body), section1 (appendix)
+- Updated `default_styles.json` with new style IDs auto-discovered from the template
+- Updated `sample_report.json` to set `include_cover: false` for the new template
+
+### Adaptive Section Detection (`_detect_template_sections`)
+
+Added `_detect_template_sections()` helper that identifies body and appendix sections
+by structural analysis rather than hardcoded file names:
+
+- **Body section**: detected by highest `styleIDRef="15"` count (□ heading markers)
+- **Appendix section**: detected by `colPr` + 1×3 table (appendix bar), excluding body
+- **Cover section**: detected by absence of `styleIDRef="15"` headings
+- Replaces fragile `colPr`-only detection that failed when cover sections also had `colPr`
+- Backward compatible with old 3-section templates
+
+### Single-Run Date Line Support
+
+`inject_body_date()` now handles templates where the date line uses a single `<hp:run>`
+(all text in one charPrIDRef) instead of the legacy multi-run format. Falls through to
+multi-run path when 2+ unique charPrIDRefs are found.
+
+### Dynamic Image Manifest
+
+`generate_content_hpf()` now accepts an `image_files` list and generates manifest entries
+for all images found in `BinData/`, instead of hardcoding `image1.png` + `image2.jpg`.
+
+### Appendix Spacer Detection
+
+Appendix skeleton extraction now validates spacer paragraphs (must be empty, no tables)
+instead of blindly taking the next paragraph after the appendix bar. Generates a spacer
+when the template doesn't include one.
+
+---
+
 ## [0.5.0] - 2026-03-20
 
 ### Adversarial Self-Review Round 4: Three Fixes

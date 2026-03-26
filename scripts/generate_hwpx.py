@@ -209,7 +209,7 @@ class VertPosTracker:
 # Style Auto-Discovery from header.xml
 # ============================================================================
 
-# Hardcoded IDs for the bundled 이노베이션아카데미 template
+# Default IDs (legacy fallback; auto-discovered from template at runtime)
 DEFAULT_STYLE_MAP = {
     # (charPrIDRef, paraPrIDRef, vertsize, textheight, baseline, spacing)
     "heading_marker":   ("27", "28", 1500, 1500, 1275, 900),   # □ marker
@@ -454,6 +454,63 @@ def _make_style_tuple(char_pr_id, para_pr_id, vertsize, textheight, baseline, sp
             int(baseline), int(spacing))
 
 
+def _detect_template_sections(template_dir):
+    """Detect which section files contain body and appendix content.
+
+    Uses styleIDRef="15" count as the primary discriminator:
+      - Body section: has the most styleIDRef="15" paragraphs (□ headings)
+      - Appendix section: has colPr + 1x3 table (appendix bar), not the body
+
+    Returns (body_path, appendix_path). Either may be None if not found.
+    """
+    template_dir = Path(template_dir)
+    section_paths = sorted(template_dir.glob("Contents/section*.xml"),
+                           key=lambda p: int(re.search(r'(\d+)', p.name).group(1)))
+
+    # Score each section
+    candidates = []
+    for path in section_paths:
+        try:
+            text = path.read_text(encoding='utf-8')
+        except (UnicodeDecodeError, OSError):
+            continue
+        heading_count = len(re.findall(r'styleIDRef="15"', text))
+        has_colpr = '<hp:colPr' in text
+        has_appendix_bar = bool(re.search(r'colCnt="3".*?rowCnt="1"', text, re.DOTALL)
+                                or re.search(r'rowCnt="1".*?colCnt="3"', text, re.DOTALL))
+        candidates.append({
+            'path': path, 'headings': heading_count,
+            'has_colpr': has_colpr, 'has_appendix_bar': has_appendix_bar,
+        })
+
+    # Body: section with most styleIDRef="15" headings (must have some)
+    body_path = None
+    body_candidates = [c for c in candidates if c['headings'] > 0]
+    if body_candidates:
+        body_path = max(body_candidates, key=lambda c: c['headings'])['path']
+
+    # Appendix: section with colPr + 1x3 table, not the body section
+    appendix_path = None
+    for c in candidates:
+        if c['path'] == body_path:
+            continue
+        if c['has_colpr'] and c['has_appendix_bar']:
+            appendix_path = c['path']
+            break
+
+    # Fallback for legacy templates
+    if body_path is None:
+        fallback = template_dir / "Contents" / "section1.xml"
+        if fallback.exists():
+            body_path = fallback
+    if appendix_path is None:
+        fallback = template_dir / "Contents" / "section2.xml"
+        if fallback.exists():
+            appendix_path = fallback
+
+    return body_path, appendix_path
+
+
 def build_style_map_from_template(template_dir):
     """Build a complete style map by parsing the extracted template.
 
@@ -464,10 +521,11 @@ def build_style_map_from_template(template_dir):
     """
     template_dir = Path(template_dir)
     header_path = template_dir / "Contents" / "header.xml"
-    section1_path = template_dir / "Contents" / "section1.xml"
-    section2_path = template_dir / "Contents" / "section2.xml"
 
-    if not header_path.exists() or not section1_path.exists():
+    # Detect body and appendix sections by structural analysis
+    body_section_path, appendix_section_path = _detect_template_sections(template_dir)
+
+    if not header_path.exists() or not body_section_path.exists():
         return None
 
     # Phase A: Parse header catalogs
@@ -478,8 +536,8 @@ def build_style_map_from_template(template_dir):
     sm = dict(DEFAULT_STYLE_MAP)
 
     try:
-        # Phase B: Parse section1.xml
-        s1_xml = section1_path.read_text(encoding='utf-8')
+        # Phase B: Parse body section (section0 or section1 depending on template)
+        s1_xml = body_section_path.read_text(encoding='utf-8')
         s1_paras, _ = _extract_all_top_level_paragraphs(s1_xml)
         if not s1_paras:
             return None
@@ -497,7 +555,9 @@ def build_style_map_from_template(template_dir):
         for i, attrs in enumerate(para_attrs_list):
             if attrs['has_colpr'] and first_para_idx is None:
                 first_para_idx = i
-            elif attrs['styleIDRef'] == '15' and heading_idx is None:
+            elif (attrs['styleIDRef'] == '15' and heading_idx is None
+                  and not attrs['has_tbl'] and attrs['has_text']):
+                # Skip styleIDRef=15 paragraphs with tables or no text
                 heading_idx = i
             elif attrs['has_tbl'] and not attrs['has_colpr'] and table_wrapper_idx is None:
                 table_wrapper_idx = i
@@ -776,10 +836,10 @@ def build_style_map_from_template(template_dir):
                 pp = header_pp or '25'
                 sm['table_body'] = _make_style_tuple(body_cp, pp, h, h, int(h*0.85), 360)
 
-        # Phase E: Parse section2.xml for appendix roles
-        if section2_path.exists():
+        # Phase E: Parse appendix section for appendix roles
+        if appendix_section_path.exists():
             try:
-                s2_xml = section2_path.read_text(encoding='utf-8')
+                s2_xml = appendix_section_path.read_text(encoding='utf-8')
                 s2_paras, _ = _extract_all_top_level_paragraphs(s2_xml)
                 s2_attrs = [_extract_para_attrs(p) for p in s2_paras]
 
@@ -851,7 +911,7 @@ def build_style_map_from_template(template_dir):
                         a['textheight'], a['baseline'], a['spacing'])
 
             except Exception as e:
-                print(f"Warning: Could not parse section2.xml: {e}")
+                print(f"Warning: Could not parse appendix section: {e}")
 
         return sm
 
@@ -981,7 +1041,7 @@ def inject_body_date(p1_xml, date_str, department):
         re.DOTALL
     )
     runs = list(run_pattern.finditer(p1_xml))
-    if len(runs) < 2:
+    if not runs:
         return None
 
     # Identify unique charPrIDRef groups in order
@@ -994,7 +1054,17 @@ def inject_body_date(p1_xml, date_str, department):
             unique_cps.append(cp)
             seen.add(cp)
 
+    # Handle single-run date line (all text in one run)
     if len(unique_cps) < 2:
+        if len(runs) >= 1 and (date_str or department):
+            rm = runs[0]
+            old_t = re.search(r'<hp:t>[^<]*</hp:t>', rm.group(3))
+            if old_t:
+                new_date_text = f"('{date_str}, {department})" if date_str and department else \
+                                f"('{date_str})" if date_str else f"({department})"
+                new_t = f"<hp:t>{xml_escape(new_date_text)}</hp:t>"
+                new_body = rm.group(3)[:old_t.start()] + new_t + rm.group(3)[old_t.end():]
+                return p1_xml[:rm.start()] + rm.group(1) + new_body + rm.group(4) + p1_xml[rm.end():]
         return None
 
     date_cp = unique_cps[0]
@@ -1562,24 +1632,27 @@ def generate_content_item(item, sm, vpt):
 def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref="2"):
     """Generate a body section with title bar and content.
 
-    When template_dir is provided, uses the template's section1.xml as the
-    structural skeleton (title bar, date line, spacer) and appends dynamic
-    content.  Falls back to fully-generated XML if template is unavailable
-    or injection fails.
+    When template_dir is provided, finds the body section (section0 or
+    section1, whichever has colPr) and uses it as the structural skeleton
+    (title bar, date line, spacer).  Appends dynamic content.  Falls back
+    to fully-generated XML if template is unavailable or injection fails.
     """
     title = section_config.get("title_bar", "보고서 제목")
     content_items = section_config.get("content", [])
     date_text = section_config.get("date", "")
     department = section_config.get("department", "")
 
-    # --- Template path: use skeleton from template section1.xml ---
+    # --- Template path: use skeleton from body section ---
+    # Detects body section by styleIDRef="15" heading count.
     # Uses structural markers (colPr, RIGHT-aligned paraPr) instead of position. (V3 fix)
     if template_dir:
-        section1_path = Path(template_dir) / "Contents" / "section1.xml"
         header_path = Path(template_dir) / "Contents" / "header.xml"
-        if section1_path.exists():
+        body_section_path, _ = _detect_template_sections(template_dir)
+        if body_section_path is None:
+            body_section_path = Path(template_dir) / "Contents" / "section1.xml"
+        if body_section_path.exists():
             try:
-                raw_xml = section1_path.read_text(encoding="utf-8")
+                raw_xml = body_section_path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 raw_xml = None
             if raw_xml:
@@ -1690,43 +1763,63 @@ def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref
 def generate_appendix_section_xml(section_config, sm, template_dir=None, outline_ref="2"):
     """Generate an appendix section with tab-style title bar.
 
-    When template_dir is provided, uses the template's section2.xml as the
-    structural skeleton.  Falls back to fully-generated XML if unavailable.
+    When template_dir is provided, finds the appendix section (section1 or
+    section2) and uses it as the structural skeleton.  Falls back to
+    fully-generated XML if unavailable.
     """
     tab_label = section_config.get("title_bar", "참고1")
     appendix_title = section_config.get("appendix_title", "")
     content_items = section_config.get("content", [])
 
-    # --- Template path: use skeleton from template section2.xml ---
+    # --- Template path: use skeleton from appendix section ---
+    # Detects appendix section by colPr + 1x3 table (appendix bar).
     # Uses structural markers (colPr) instead of position. (V3 fix)
     if template_dir:
-        section2_path = Path(template_dir) / "Contents" / "section2.xml"
-        if section2_path.exists():
+        _, appendix_section_path = _detect_template_sections(template_dir)
+        if appendix_section_path is None:
+            appendix_section_path = Path(template_dir) / "Contents" / "section2.xml"
+        if appendix_section_path.exists():
             try:
-                raw_xml = section2_path.read_text(encoding="utf-8")
+                raw_xml = appendix_section_path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
                 raw_xml = None
             if raw_xml:
                 all_paras, sec_header = _extract_all_top_level_paragraphs(raw_xml)
 
-                if len(all_paras) >= 2:
+                if len(all_paras) >= 1:
                     # Identify skeleton by structural markers
                     skeleton_first = None  # has <hp:colPr>
-                    skeleton_spacer = None # next paragraph after first_para
+                    skeleton_spacer = None # empty paragraph after first_para (optional)
 
                     for i, p in enumerate(all_paras):
                         if '<hp:colPr' in p and skeleton_first is None:
                             skeleton_first = p
                         elif skeleton_first is not None and skeleton_spacer is None:
-                            skeleton_spacer = p
-                            break
+                            # Only accept truly empty paragraphs as spacer
+                            texts = re.findall(r'<hp:t>([^<]+)</hp:t>', p)
+                            has_text = any(t.strip() for t in texts)
+                            has_tbl = '<hp:tbl' in p
+                            if not has_text and not has_tbl:
+                                skeleton_spacer = p
+                            break  # Stop after first candidate (spacer or not)
 
-                    if skeleton_first is not None and skeleton_spacer is not None:
+                    if skeleton_first is not None:
                         p0 = inject_appendix_labels(skeleton_first, tab_label, appendix_title)
-                        p1 = skeleton_spacer
 
                         if p0 is not None:
-                            vpt = seed_vpt_from_skeleton([p0, p1])
+                            skeleton_parts = [p0]
+                            if skeleton_spacer is not None:
+                                skeleton_parts.append(skeleton_spacer)
+                            vpt = seed_vpt_from_skeleton(skeleton_parts)
+
+                            # Generate spacer if template didn't have one
+                            spacer_xml = ""
+                            if skeleton_spacer is None:
+                                asp = sm["appendix_spacer"]
+                                vp = vpt.next(asp[2], asp[5])
+                                spacer_xml = paragraph_xml(asp[1], "15", run_xml(asp[0]),
+                                    lineseg_xml(vertpos=vp, vertsize=asp[2], textheight=asp[3],
+                                                baseline=asp[4], spacing=asp[5]))
 
                             content_xml = ""
                             for item in content_items:
@@ -1738,7 +1831,11 @@ def generate_appendix_section_xml(section_config, sm, template_dir=None, outline
                                                     baseline=ss[4], spacing=ss[5]))
                                 content_xml += generate_content_item(item, sm, vpt)
 
-                            return sec_header + p0 + p1 + content_xml + '</hs:sec>'
+                            result = sec_header + p0
+                            if skeleton_spacer is not None:
+                                result += skeleton_spacer
+                            result += spacer_xml + content_xml + '</hs:sec>'
+                            return result
 
     # --- Fallback: fully generated (original v3 behavior) ---
     vpt = VertPosTracker()
@@ -1823,13 +1920,25 @@ def generate_cover_section_xml(template_section0_path, config, sm):
 # content.hpf / container.rdf Generators
 # ============================================================================
 
-def generate_content_hpf(num_sections, has_images=True, title="보고서", creator="이노베이션아카데미"):
-    """Generate the content.hpf (OPF package manifest)."""
+def generate_content_hpf(num_sections, has_images=True, image_files=None,
+                         title="보고서", creator="이노베이션아카데미"):
+    """Generate the content.hpf (OPF package manifest).
+
+    Args:
+        image_files: Optional list of image filenames in BinData/ (e.g. ['image1.png']).
+            If None, falls back to has_images flag with image1.png only.
+    """
     now = datetime.now().strftime("%Y-%m-%dT%H:%M:%SZ")
     manifest = '<opf:item id="header" href="Contents/header.xml" media-type="application/xml"/>'
-    if has_images:
+    if image_files:
+        for img in sorted(image_files):
+            img_id = img.rsplit('.', 1)[0]  # e.g. 'image1'
+            ext = img.rsplit('.', 1)[-1].lower()
+            media_type = {'png': 'image/png', 'jpg': 'image/jpg', 'jpeg': 'image/jpeg',
+                          'gif': 'image/gif', 'bmp': 'image/bmp'}.get(ext, 'image/png')
+            manifest += f'<opf:item id="{img_id}" href="BinData/{img}" media-type="{media_type}" isEmbeded="1"/>'
+    elif has_images:
         manifest += '<opf:item id="image1" href="BinData/image1.png" media-type="image/png" isEmbeded="1"/>'
-        manifest += '<opf:item id="image2" href="BinData/image2.jpg" media-type="image/jpg" isEmbeded="1"/>'
     for i in range(num_sections):
         manifest += f'<opf:item id="section{i}" href="Contents/section{i}.xml" media-type="application/xml"/>'
     manifest += '<opf:item id="settings" href="settings.xml" media-type="application/xml"/>'
@@ -2107,8 +2216,15 @@ def generate_hwpx(config, output_path, template_path=None):
         if include_cover:
             cover_src = tmpdir / "template" / "Contents" / "section0.xml"
             if cover_src.exists():
-                cover_xml = generate_cover_section_xml(cover_src, config, sm)
-                (contents_dir / "section0.xml").write_text(cover_xml, encoding="utf-8")
+                # Check if section0 is a cover-only section (no body headings)
+                # Body sections have styleIDRef="15" (□ headings); cover sections don't.
+                cover_check = cover_src.read_text(encoding="utf-8")
+                heading_count = len(re.findall(r'styleIDRef="15"', cover_check))
+                if heading_count == 0:
+                    cover_xml = generate_cover_section_xml(cover_src, config, sm)
+                    (contents_dir / "section0.xml").write_text(cover_xml, encoding="utf-8")
+                else:
+                    include_cover = False  # section0 is body, not cover
             else:
                 include_cover = False
 
@@ -2140,13 +2256,17 @@ def generate_hwpx(config, output_path, template_path=None):
             section_files.append("section0.xml")
 
         total_sections = len(section_files)
-        has_images = (out_dir / "BinData").exists()
+        bin_dir = out_dir / "BinData"
+        has_images = bin_dir.exists()
+        image_files = None
+        if has_images:
+            image_files = [f.name for f in sorted(bin_dir.iterdir()) if f.is_file()]
 
         # Generate metadata files
         title = config.get("title", "보고서")
         creator = config.get("creator", "이노베이션아카데미")
         (contents_dir / "content.hpf").write_text(
-            generate_content_hpf(total_sections, has_images, title, creator), encoding="utf-8")
+            generate_content_hpf(total_sections, has_images, image_files, title, creator), encoding="utf-8")
         (meta_dst / "container.rdf").write_text(
             generate_container_rdf(total_sections), encoding="utf-8")
 
