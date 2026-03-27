@@ -448,5 +448,40 @@ class TestColSpanOnlyRegression(unittest.TestCase):
         ])
 
 
+# ============================================================================
+# Page number presence test
+# ============================================================================
+
+class TestPageNumberPresence(unittest.TestCase):
+    """Verify generated HWPX contains <hp:pageNum> in body section."""
+
+    def test_body_section_has_page_number(self):
+        """Generated body section XML must contain bottom-center page number."""
+        import tempfile, zipfile
+        from scripts.generate_hwpx import generate_hwpx
+
+        config = {
+            'title': 'Page Number Test',
+            'date': '2026.01.01.',
+            'department': 'Test',
+            'sections': [{
+                'type': 'body',
+                'title': 'Section',
+                'content': [{'type': 'paragraph', 'text': 'Test.'}]
+            }]
+        }
+        out = tempfile.mktemp(suffix='.hwpx')
+        template = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                'assets', 'template.hwpx')
+        try:
+            generate_hwpx(config, out, template_path=template)
+            with zipfile.ZipFile(out, 'r') as z:
+                xml = z.read('Contents/section0.xml').decode('utf-8')
+            self.assertIn('<hp:pageNum pos="BOTTOM_CENTER"', xml)
+        finally:
+            if os.path.exists(out):
+                os.unlink(out)
+
+
 if __name__ == '__main__':
     unittest.main()
