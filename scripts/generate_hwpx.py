@@ -1770,7 +1770,8 @@ def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref
         f'<hp:ctrl><hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="1" sameGap="0"/></hp:ctrl>'
         f'{sec_pr_xml(outline_ref)}'
         f'</hp:run>'
-        f'<hp:run charPrIDRef="{sm["heading_tail"][0]}">{title_bar}</hp:run>'
+        f'<hp:run charPrIDRef="0"><hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/></hp:ctrl>'
+        f'{title_bar}</hp:run>'
         f'<hp:run charPrIDRef="{fp[0]}"><hp:t/></hp:run>'
         f'{lineseg_xml(vertpos=0, vertsize=fp[2], textheight=fp[3], baseline=fp[4], spacing=fp[5])}'
         f'</hp:p>')
@@ -1910,7 +1911,8 @@ def generate_appendix_section_xml(section_config, sm, template_dir=None, outline
         f'<hp:ctrl><hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="1" sameGap="0"/></hp:ctrl>'
         f'{sec_pr_xml(outline_ref)}'
         f'</hp:run>'
-        f'<hp:run charPrIDRef="{af[0]}">{app_bar}<hp:t/></hp:run>'
+        f'<hp:run charPrIDRef="0"><hp:ctrl><hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-"/></hp:ctrl>'
+        f'{app_bar}<hp:t/></hp:run>'
         f'{lineseg_xml(vertpos=0, vertsize=af[2], textheight=af[3], baseline=af[4], spacing=af[5])}'
         f'</hp:p>')
     paragraphs += first_para
