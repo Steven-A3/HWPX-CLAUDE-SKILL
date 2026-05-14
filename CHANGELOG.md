@@ -1,5 +1,63 @@
 # CHANGELOG
 
+## [0.7.0] - 2026-05-14
+
+### Template-faithful marker styles (□ / ㅇ / -) — 165 % line-spacing band
+
+Realigned the bullet / box / dash paragraph styles in `assets/default_styles.json` to the
+template's most-common 165 % line-spacing variants. Documents generated from this version
+will use the same paraPrs that dominate `assets/template.hwpx`, including the
+**40.5 pt 내어쓰기** for `-` dash paragraphs that matches the Hancom 문단 모양 dialog.
+
+### Style map changes
+
+| Marker | Previous (charPr / paraPr) | New (charPr / paraPr) | What changed visually |
+|---|---|---|---|
+| □ heading | `42 / 26` (160 % LS) | `21 / 40` (165 % LS, marker run) + `2 / 40` (body) | tighter hanging indent, 165 % spacing |
+| ㅇ bullet | `22 / 39` (160 %, intent -2940) | `22 / 41` (165 %, intent -3240) | slightly deeper hanging indent |
+| `-` dash | `22 / 18` (160 %, intent -2440) | `15 / 43` (165 %, intent -4050) | **40.5 pt 내어쓰기** matching template |
+| `heading_end` | `29 / 28` (paraPr 28 did not exist) | `2 / 40` | latent bug fixed |
+
+### Auto-discovery rewrite (`build_style_map_from_template`)
+
+Replaced the fragile "first tall group → bullet, second → dash" heuristic with text-marker
+matching + frequency analysis:
+
+- Bucketize body paragraphs by leading marker glyph (□ / ㅇ / `-` / `*`)
+- Pick the most common `(paraPr, charPr)` pair per marker
+- Filter to a specific line-spacing band (default `'165'`) with graceful fallback
+- Heading-run roles (`marker / text / tail / end`) extracted from a representative paragraph
+  using the template's actual run order
+
+This makes the style map **deterministic across template re-saves** — re-running the
+discovery on the same template always produces the same values (locked in by the new
+`test_cache_regenerates_to_same_values`).
+
+### `--line-spacing` CLI flag
+
+`scripts/generate_hwpx.py` accepts `--line-spacing 155|160|165` to rebuild the style map
+for a different LS band. Default (no flag) uses the committed 165 % cache.
+
+### Fixes
+
+- `_parse_header_catalogs` now reads `<hh:lineSpacing>` from `<hp:switch>/<hp:default>`
+  (it was previously only finding direct children and reporting every paraPr as 160 %).
+- `DEFAULT_STYLE_MAP` (in-code fallback) updated to mirror the new cache values; no longer
+  references the non-existent paraPr `28`.
+
+### New tests (`tests/test_bullet_paragraph_styles.py`, 9 tests)
+
+- paraPr existence (catches the old `paraPr 28` class of bug)
+- screenshot dialog state uniquely identifies paraPr 43
+- template frequency alignment (dash → 43, bullet → 41, heading → 40) — verifies against
+  the template directly, not against expected values
+- paraPr property matrix (align, line-spacing, intent magnitudes)
+- cache-regenerates-to-same-values (durability guard)
+- end-to-end generated paragraph property matching
+- `--line-spacing 160` override produces a 160 % LS paraPr
+
+---
+
 ## [0.6.0] - 2026-03-26
 
 ### Template Update & Adaptive Section Detection

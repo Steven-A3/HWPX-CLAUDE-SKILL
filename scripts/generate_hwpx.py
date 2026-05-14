@@ -215,19 +215,21 @@ class VertPosTracker:
 # Default IDs (legacy fallback; auto-discovered from template at runtime)
 DEFAULT_STYLE_MAP = {
     # (charPrIDRef, paraPrIDRef, vertsize, textheight, baseline, spacing)
-    "heading_marker":   ("42", "26", 1500, 1500, 1275, 900),   # □ marker
-    "heading_text":     ("2",  "26", 1500, 1500, 1275, 900),   # HY헤드라인M 15pt
-    "heading_tail":     ("42", "26", 1500, 1500, 1275, 900),   # trailing space
-    "heading_end":      ("29", "28", 1500, 1500, 1275, 900),   # closing run
-    "paragraph":        ("22", "39", 1500, 1500, 1275, 900),   # 휴먼명조 15pt
-    "paragraph_end":    ("33", "39", 1500, 1500, 1275, 900),
-    "bullet":           ("22", "39", 1500, 1500, 1275, 900),   # ㅇ bullet
-    "bullet_end":       ("33", "39", 1500, 1500, 1275, 900),
-    "dash":             ("22", "18", 1500, 1500, 1275, 900),   # - dash
-    "dash_end":         ("22", "18", 1500, 1500, 1275, 900),
+    # Marker styles use the 165% line-spacing band by default — see
+    # build_style_map_from_template() and DEFAULT_LINE_SPACING_BAND.
+    "heading_marker":   ("21", "40", 1500, 1500, 1275, 900),   # □ marker run
+    "heading_text":     ("2",  "40", 1500, 1500, 1275, 900),   # HY헤드라인M 15pt body
+    "heading_tail":     ("2",  "40", 1500, 1500, 1275, 900),   # trailing space
+    "heading_end":      ("2",  "40", 1500, 1500, 1275, 900),   # closing run
+    "paragraph":        ("22", "41", 1500, 1500, 1275, 900),   # 휴먼명조 15pt
+    "paragraph_end":    ("33", "41", 1500, 1500, 1275, 900),
+    "bullet":           ("22", "41", 1500, 1500, 1275, 900),   # ㅇ bullet, 165% LS
+    "bullet_end":       ("33", "41", 1500, 1500, 1275, 900),
+    "dash":             ("15", "43", 1500, 1500, 1275, 900),   # - dash, 165% LS, 40.5pt 내어쓰기
+    "dash_end":         ("15", "43", 1500, 1500, 1275, 900),
     "star":             ("71", "48", 1300, 1300, 1105, 716),   # * detail
     "star_end":         ("71", "48", 1300, 1300, 1105, 716),
-    "note":             ("22", "39", 1500, 1500, 1275, 900),   # ▷ note
+    "note":             ("22", "39", 1500, 1500, 1275, 900),   # ▷ note (post-table heuristic)
     "table_caption":    ("27", "16", 1200, 1200, 1020, 720),   # < caption >
     "table_wrapper":    ("21", "22", 6104, 6104, 5188, 900),   # table container (base; overridden dynamically)
     "table_header":     ("35", "29", 1100, 1100, 935,  360),   # header cell
@@ -352,13 +354,24 @@ def _parse_header_catalogs(header_xml_path):
                 'bold': has_bold,
             }
 
-        # Build paraPr catalog
+        # Build paraPr catalog. lineSpacing lives under <hp:switch>/<hp:default>
+        # in modern templates, so search descendants and prefer the default
+        # branch's value (matches what older Hancom builds read).
         para_catalog = {}
         for pp in root.findall('.//hh:paraPr', ns):
             ppid = pp.get('id', '')
             align_el = pp.find('hh:align', ns)
             h_align = align_el.get('horizontal', 'JUSTIFY') if align_el is not None else 'JUSTIFY'
-            ls_el = pp.find('hh:lineSpacing', ns)
+            ls_els = pp.findall('.//hh:lineSpacing', ns)
+            # Prefer the <hp:default> branch when present; fall back to first.
+            ls_el = None
+            for el in ls_els:
+                parent_tag = el.getparent().tag if hasattr(el, 'getparent') else None
+                if parent_tag and parent_tag.endswith('default'):
+                    ls_el = el
+                    break
+            if ls_el is None and ls_els:
+                ls_el = ls_els[-1]  # default branch is typically last
             ls_type = ls_el.get('type', 'PERCENT') if ls_el is not None else 'PERCENT'
             ls_value = ls_el.get('value', '160') if ls_el is not None else '160'
             para_catalog[ppid] = {
@@ -457,6 +470,86 @@ def _make_style_tuple(char_pr_id, para_pr_id, vertsize, textheight, baseline, sp
             int(baseline), int(spacing))
 
 
+# Marker patterns used for text-based bucketization of body paragraphs.
+# These five glyphs are the standard markers in Korean government reports
+# (이노베이션아카데미 표준 보고서 양식) and are stable across templates, so
+# matching on text content here is intentional and more reliable than
+# structural ordering for distinguishing the marker styles.
+_MARKER_PATTERNS = {
+    "heading": re.compile(r'^\s*□'),
+    "bullet":  re.compile(r'^\s*ㅇ(?:\s|$)'),
+    "dash":    re.compile(r'^\s*-\s'),
+    "star":    re.compile(r'^\s*\*\s'),
+}
+
+DEFAULT_LINE_SPACING_BAND = '165'
+
+
+def _extract_paragraph_first_text(para_xml):
+    """Concatenate <hp:t> contents at the paragraph's top level.
+
+    Strips nested table-cell text (<hp:tc>...</hp:tc>) so a paragraph that
+    contains a table is identified by its own runs, not by table-cell text.
+    """
+    cleaned = re.sub(r'<hp:tc\b.*?</hp:tc>', '', para_xml, flags=re.DOTALL)
+    texts = re.findall(r'<hp:t>([^<]*)</hp:t>', cleaned)
+    return ''.join(texts)
+
+
+def _classify_paragraphs_by_marker(paragraphs, para_attrs_list, para_catalog,
+                                    line_spacing_band):
+    """Bucketize body paragraphs by leading marker character.
+
+    Returns {marker_name: [(paraPrIDRef, primary_charPr, attrs, idx), ...]}.
+
+    When ``line_spacing_band`` is given (e.g. '165'), entries whose paraPr
+    line spacing does not match are dropped — UNLESS that would empty the
+    bucket, in which case the unfiltered set is kept (graceful fallback so
+    templates without a 165 % variant still produce a result).
+    """
+    buckets = {key: [] for key in _MARKER_PATTERNS}
+    for i, (para, a) in enumerate(zip(paragraphs, para_attrs_list)):
+        if a['has_tbl']:
+            continue
+        if not a['has_text']:
+            continue
+        text = _extract_paragraph_first_text(para)
+        for key, pat in _MARKER_PATTERNS.items():
+            if pat.match(text):
+                primary_cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else None
+                buckets[key].append((a['paraPrIDRef'], primary_cp, a, i))
+                break
+
+    if para_catalog and line_spacing_band:
+        for key in list(buckets.keys()):
+            filtered = [
+                entry for entry in buckets[key]
+                if para_catalog.get(entry[0], {}).get('line_spacing_value', '')
+                   == line_spacing_band
+            ]
+            if filtered:
+                buckets[key] = filtered
+
+    return buckets
+
+
+def _most_common_signature(bucket):
+    """Pick the (paraPrIDRef, primary_charPr) pair with highest count.
+
+    Ties are broken by document order (earliest occurrence wins).
+    Returns (paraPrIDRef, primary_charPr, sample_attrs, sample_idx) or None.
+    """
+    if not bucket:
+        return None
+    from collections import Counter
+    counts = Counter((paraPr, cp) for paraPr, cp, _, _ in bucket)
+    top = counts.most_common(1)[0][0]
+    for paraPr, cp, a, idx in bucket:
+        if (paraPr, cp) == top:
+            return paraPr, cp, a, idx
+    return None
+
+
 def _detect_template_sections(template_dir):
     """Detect which section files contain body and appendix content.
 
@@ -514,11 +607,23 @@ def _detect_template_sections(template_dir):
     return body_path, appendix_path
 
 
-def build_style_map_from_template(template_dir):
+def build_style_map_from_template(template_dir, line_spacing_band=DEFAULT_LINE_SPACING_BAND):
     """Build a complete style map by parsing the extracted template.
 
     Uses structural markers (colPr, styleIDRef, table geometry, paraPr alignment)
-    and charPr catalog properties (font face, height) — never matches text content.
+    and charPr catalog properties (font face, height) for *structural* roles
+    (title bar, date line, table, appendix).
+
+    For the five marker paragraph styles (□ heading, ㅇ bullet, - dash, * star,
+    plus the post-table note) the discovery matches the leading marker glyph
+    and picks the **most frequent** (paraPr, charPr) pair, optionally filtered
+    to a specific line-spacing band (default ``'165'``%). Text-based matching
+    for these glyphs is intentional: they are stable identifiers in Korean
+    government report templates.
+
+    ``line_spacing_band``: line-spacing percent value (e.g. ``'165'``,
+    ``'160'``, ``'155'``) used to filter marker buckets. Pass ``None`` to
+    disable filtering and use whichever paraPr is most common overall.
 
     Returns a style map dict compatible with DEFAULT_STYLE_MAP, or None on failure.
     """
@@ -627,121 +732,75 @@ def build_style_map_from_template(template_dir):
                 sp_cp, a['paraPrIDRef'], a['vertsize'], a['textheight'],
                 a['baseline'], a['spacing'])
 
-        # --- heading ---
-        if heading_idx is not None:
-            a = para_attrs_list[heading_idx]
+        # --- Marker buckets: heading (□), bullet (ㅇ), dash (-), star (*) ---
+        # Text-marker matching + most-common-paraPr selection. See module docs
+        # for why text-based matching is appropriate for these five glyphs.
+        marker_buckets = _classify_paragraphs_by_marker(
+            s1_paras, para_attrs_list, para_catalog, line_spacing_band)
+
+        # Heading (□): pick most common paraPr, then map per-run charPr roles.
+        # The template's heading paragraphs are: run[0] = □ marker glyph,
+        # run[1] = body text (" 제목"). The generator emits four runs
+        # (marker, text, tail-space, end-empty) so the remaining two roles
+        # reuse the body-text charPr.
+        heading_pick = _most_common_signature(marker_buckets["heading"])
+        if heading_pick:
+            paraPr, _primary_cp, a, _idx = heading_pick
             runs = a['charPrIDRefs']
-            # Identify heading runs by charPr face from catalog
-            heading_text_cp = None
-            heading_marker_cp = None
-            heading_tail_cp = None
-            heading_end_cp = None
-            for cp in runs:
-                info = char_catalog.get(cp, {})
-                face = info.get('face', '')
-                if '헤드라인' in face and heading_text_cp is None:
-                    heading_text_cp = cp
-                elif heading_marker_cp is None and cp != heading_text_cp:
-                    heading_marker_cp = cp
-            # Tail/end: last two unique charPrs that aren't heading_text
-            other_cps = [cp for cp in runs if cp != heading_text_cp]
-            if len(other_cps) >= 1:
-                heading_marker_cp = heading_marker_cp or other_cps[0]
-                heading_tail_cp = other_cps[0]
-            if len(other_cps) >= 2:
-                heading_end_cp = other_cps[-1]
+            heading_marker_cp = runs[0] if runs else None
+            heading_text_cp = runs[1] if len(runs) >= 2 else heading_marker_cp
+            heading_tail_cp = heading_text_cp
+            heading_end_cp = heading_text_cp
+            for role, cp in (("heading_marker", heading_marker_cp),
+                             ("heading_text", heading_text_cp),
+                             ("heading_tail", heading_tail_cp),
+                             ("heading_end", heading_end_cp)):
+                if cp:
+                    sm[role] = _make_style_tuple(
+                        cp, paraPr, a['vertsize'], a['textheight'],
+                        a['baseline'], a['spacing'])
 
-            if heading_text_cp:
-                sm['heading_text'] = _make_style_tuple(
-                    heading_text_cp, a['paraPrIDRef'], a['vertsize'],
-                    a['textheight'], a['baseline'], a['spacing'])
-            if heading_marker_cp:
-                sm['heading_marker'] = _make_style_tuple(
-                    heading_marker_cp, a['paraPrIDRef'], a['vertsize'],
-                    a['textheight'], a['baseline'], a['spacing'])
-            if heading_tail_cp:
-                sm['heading_tail'] = _make_style_tuple(
-                    heading_tail_cp, a['paraPrIDRef'], a['vertsize'],
-                    a['textheight'], a['baseline'], a['spacing'])
-            if heading_end_cp:
-                sm['heading_end'] = _make_style_tuple(
-                    heading_end_cp, a['paraPrIDRef'], a['vertsize'],
-                    a['textheight'], a['baseline'], a['spacing'])
-
-        # --- Content paragraphs: bullet, dash, star, note ---
-        # Identify by charPr height from catalog + document order
-        content_paras = []
-        start_idx = (heading_idx + 1) if heading_idx is not None else 3
-        note_found = False
-        for i in range(start_idx, len(para_attrs_list)):
-            a = para_attrs_list[i]
-            if a['has_tbl']:
-                continue
-            if a['styleIDRef'] == '15':
-                continue  # another heading
-            if not a['has_text']:
-                continue  # spacer
-            # Get primary charPr height from catalog
-            primary_cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else None
-            cp_info = char_catalog.get(primary_cp, {}) if primary_cp else {}
-            height = cp_info.get('height', 0)
-            content_paras.append((i, a, height, primary_cp))
-
-        # Group by (paraPrIDRef, primary_charPr) signature — first occurrence
-        seen_sigs = {}
-        for idx, a, height, primary_cp in content_paras:
-            sig = (a['paraPrIDRef'], primary_cp)
-            if sig not in seen_sigs:
-                seen_sigs[sig] = (idx, a, height, primary_cp)
-
-        # Assign roles by height ranking + order
-        tall_groups = []  # height >= 1500 (bullet, dash)
-        mid_groups = []   # height 1300-1499 (star, table_caption)
-        other_groups = [] # everything else (note)
-
-        for sig, (idx, a, height, primary_cp) in sorted(seen_sigs.items(), key=lambda x: x[1][0]):
-            if height >= 1500:
-                tall_groups.append((idx, a, height, primary_cp))
-            elif height >= 1300:
-                mid_groups.append((idx, a, height, primary_cp))
-            else:
-                other_groups.append((idx, a, height, primary_cp))
-
-        # First tall group → bullet/paragraph, second → dash
-        if len(tall_groups) >= 1:
-            idx, a, h, cp = tall_groups[0]
-            end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else cp
-            sm['bullet'] = _make_style_tuple(cp, a['paraPrIDRef'], a['vertsize'],
+        # Bullet (ㅇ): also seeds paragraph / paragraph_end
+        bullet_pick = _most_common_signature(marker_buckets["bullet"])
+        if bullet_pick:
+            paraPr, primary_cp, a, _idx = bullet_pick
+            end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else primary_cp
+            sm['bullet'] = _make_style_tuple(primary_cp, paraPr, a['vertsize'],
                                               a['textheight'], a['baseline'], a['spacing'])
-            sm['bullet_end'] = _make_style_tuple(end_cp, a['paraPrIDRef'], a['vertsize'],
+            sm['bullet_end'] = _make_style_tuple(end_cp, paraPr, a['vertsize'],
                                                   a['textheight'], a['baseline'], a['spacing'])
             sm['paragraph'] = sm['bullet']
             sm['paragraph_end'] = sm['bullet_end']
 
-        if len(tall_groups) >= 2:
-            idx, a, h, cp = tall_groups[1]
-            end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else cp
-            sm['dash'] = _make_style_tuple(cp, a['paraPrIDRef'], a['vertsize'],
+        # Dash (-)
+        dash_pick = _most_common_signature(marker_buckets["dash"])
+        if dash_pick:
+            paraPr, primary_cp, a, _idx = dash_pick
+            end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else primary_cp
+            sm['dash'] = _make_style_tuple(primary_cp, paraPr, a['vertsize'],
                                             a['textheight'], a['baseline'], a['spacing'])
-            sm['dash_end'] = _make_style_tuple(end_cp, a['paraPrIDRef'], a['vertsize'],
+            sm['dash_end'] = _make_style_tuple(end_cp, paraPr, a['vertsize'],
                                                 a['textheight'], a['baseline'], a['spacing'])
 
-        # Mid groups → star
-        if mid_groups:
-            idx, a, h, cp = mid_groups[0]
-            end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else cp
-            sm['star'] = _make_style_tuple(cp, a['paraPrIDRef'], a['vertsize'],
+        # Star (*)
+        star_pick = _most_common_signature(marker_buckets["star"])
+        if star_pick:
+            paraPr, primary_cp, a, _idx = star_pick
+            end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else primary_cp
+            sm['star'] = _make_style_tuple(primary_cp, paraPr, a['vertsize'],
                                             a['textheight'], a['baseline'], a['spacing'])
-            sm['star_end'] = _make_style_tuple(end_cp, a['paraPrIDRef'], a['vertsize'],
+            sm['star_end'] = _make_style_tuple(end_cp, paraPr, a['vertsize'],
                                                 a['textheight'], a['baseline'], a['spacing'])
 
-        # Note: paragraph after table_wrapper with text
+        # Note: detected structurally as the first text paragraph after a
+        # table wrapper (the marker glyph ▷/※ is rarely at the leading
+        # position in the template's note paragraphs). Kept out of the
+        # text-bucket flow on purpose.
         if table_wrapper_idx is not None:
             for i in range(table_wrapper_idx + 1, len(para_attrs_list)):
                 a = para_attrs_list[i]
                 if a['has_text'] and a['styleIDRef'] != '15':
                     cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else '0'
-                    end_cp = a['charPrIDRefs'][-1] if len(a['charPrIDRefs']) > 1 else cp
                     sm['note'] = _make_style_tuple(cp, a['paraPrIDRef'], a['vertsize'],
                                                     a['textheight'], a['baseline'], a['spacing'])
                     break
@@ -2219,8 +2278,16 @@ def trim_unused_styles(contents_dir):
 # Main HWPX Package Builder
 # ============================================================================
 
-def generate_hwpx(config, output_path, template_path=None):
-    """Generate an HWPX file from a configuration dictionary."""
+def generate_hwpx(config, output_path, template_path=None,
+                  line_spacing_band=None):
+    """Generate an HWPX file from a configuration dictionary.
+
+    ``line_spacing_band``: optional line-spacing percent (e.g. ``'160'``,
+    ``'155'``) for marker style selection. ``None`` (default) uses the
+    cached ``default_styles.json`` (built for the ``'165'`` band). When a
+    non-None value is passed the cache is bypassed and the style map is
+    rebuilt from the template for that band.
+    """
     if template_path is None:
         template_path = TEMPLATE_PATH
 
@@ -2236,16 +2303,23 @@ def generate_hwpx(config, output_path, template_path=None):
         with zipfile.ZipFile(template_path, 'r') as zf:
             zf.extractall(tmpdir / "template")
 
-        # Determine style map: hash-based cache with structural discovery
-        template_hash = compute_template_hash(template_path)
-        cache_path = SKILL_DIR / "assets" / "default_styles.json"
-        sm = load_cached_style_map(cache_path, template_hash)
+        # Determine style map: hash-based cache with structural discovery.
+        # When a non-default line spacing is requested, skip the cache and
+        # rebuild from the template for that band (cache stores 165% only).
+        sm = None
+        if line_spacing_band is None:
+            template_hash = compute_template_hash(template_path)
+            cache_path = SKILL_DIR / "assets" / "default_styles.json"
+            sm = load_cached_style_map(cache_path, template_hash)
+            if sm is None:
+                sm = build_style_map_from_template(tmpdir / "template")
+                if sm:
+                    save_style_map_cache(cache_path, template_hash, sm)
+        else:
+            sm = build_style_map_from_template(
+                tmpdir / "template", line_spacing_band=line_spacing_band)
         if sm is None:
-            sm = build_style_map_from_template(tmpdir / "template")
-            if sm:
-                save_style_map_cache(cache_path, template_hash, sm)
-            else:
-                sm = dict(DEFAULT_STYLE_MAP)
+            sm = dict(DEFAULT_STYLE_MAP)
 
         # Prepare output structure
         out_dir = tmpdir / "output"
@@ -2380,12 +2454,17 @@ def main():
     parser.add_argument("--output", "-o", required=True, help="Output .hwpx file path")
     parser.add_argument("--config", "-c", required=True, help="Config JSON file path")
     parser.add_argument("--template", "-t", help="Template .hwpx file (default: bundled)")
+    parser.add_argument("--line-spacing", choices=["155", "160", "165"], default=None,
+                        help="Line-spacing band for marker styles "
+                             "(default uses cached 165%% values; override to "
+                             "rebuild the style map for a different band)")
     args = parser.parse_args()
 
     with open(args.config, 'r', encoding='utf-8') as f:
         config = json.load(f)
 
-    result = generate_hwpx(config, args.output, args.template)
+    result = generate_hwpx(config, args.output, args.template,
+                            line_spacing_band=args.line_spacing)
     print(f"Generated: {result}")
 
 
