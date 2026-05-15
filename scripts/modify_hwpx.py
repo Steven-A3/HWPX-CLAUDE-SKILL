@@ -134,6 +134,233 @@ def replace_text_in_cell(section_bytes, row_addr, col_addr, new_text,
 
 
 # ============================================================================
+# Cell-Content Helpers (find_cell + set_cell_text + append_to_cell_subList +
+# replace_cell_subList) — for editing cells inside any paragraph (the
+# `_in_cell` family above operates on top-level tables only).
+# ============================================================================
+
+# In-cell linesegs use flags=393216 for EVERY line, not the 1441792 (FLAGS_
+# CONTINUATION) used in body paragraphs. Hancom rejects/flags files that
+# use 1441792 for continuation lines inside a table cell. This constant is
+# used by replace_cell_subList() when generating new in-cell paragraphs.
+IN_CELL_LINESEG_FLAGS = 393216
+
+
+def find_cell(paragraph_xml, col, row, start=0):
+    """Find the <hp:tc> at the given cellAddr inside paragraph_xml.
+
+    Walks <hp:tc>...</hp:tc> spans with nesting awareness (so nested
+    tables inside a cell don't confuse the search).
+
+    Args:
+        paragraph_xml: Raw XML string of a paragraph containing one or more
+            <hp:tc> elements (typically a paragraph wrapping a table).
+        col: target colAddr (int).
+        row: target rowAddr (int).
+        start: optional byte offset to begin searching at.
+
+    Returns:
+        (cell_start, cell_end, cell_body) tuple — or None if no match.
+    """
+    # Look for "<hp:tc" followed by " " (attributes) or ">" (no attributes).
+    # Real HWPX always has attributes; tests sometimes use the shorter form.
+    cell_open_re = re.compile(r'<hp:tc(?=[\s>])')
+    pos = start
+    while True:
+        m = cell_open_re.search(paragraph_xml, pos)
+        if not m:
+            return None
+        i = m.start()
+        depth = 0
+        j = i
+        end = None
+        while j < len(paragraph_xml):
+            if cell_open_re.match(paragraph_xml, j):
+                depth += 1
+                j = paragraph_xml.find('>', j) + 1
+            elif paragraph_xml.startswith('</hp:tc>', j):
+                depth -= 1
+                if depth == 0:
+                    end = j + len('</hp:tc>')
+                    break
+                j += len('</hp:tc>')
+            else:
+                j += 1
+        if end is None:
+            return None
+        body = paragraph_xml[i:end]
+        if re.search(rf'<hp:cellAddr\s+colAddr="{col}"\s+rowAddr="{row}"', body):
+            return i, end, body
+        pos = end
+
+
+def set_cell_text(paragraph_xml, col, row, new_text, filled_cell_template=None):
+    """Set the text of a cell at (col, row) inside paragraph_xml.
+
+    Handles both FILLED cells (already have an <hp:t>...) and EMPTY cells
+    (have an empty <hp:run charPrIDRef="X"/>).
+
+    For empty cells, inline <hp:t> injection produces text rendered with
+    the EMPTY cell's paraPr/charPr — which is typically a no-display style
+    used for placeholder cells. Instead, when ``filled_cell_template`` is
+    provided, the empty cell's entire <hp:subList> content is replaced with
+    a copy of the template's subList content (with the new text injected),
+    so the populated cell uses the same paraPr/charPr as a real filled cell.
+
+    Args:
+        paragraph_xml: Raw XML of a paragraph containing the target cell.
+        col, row: target cellAddr.
+        new_text: text to set (will be XML-escaped).
+        filled_cell_template: optional cell body to use as styling template
+            when the target cell is empty (no <hp:t>).
+
+    Returns:
+        Tuple (new_paragraph_xml, changed: bool).
+    """
+    cell = find_cell(paragraph_xml, col, row)
+    if not cell:
+        return paragraph_xml, False
+    a, b, body = cell
+    escaped = xml_escape(new_text)
+
+    if '<hp:t>' in body:
+        # Filled cell: simple <hp:t> replacement
+        new_body = re.sub(r'<hp:t>[^<]*</hp:t>',
+                           f'<hp:t>{escaped}</hp:t>', body, count=1)
+    elif filled_cell_template is not None:
+        # Empty cell + template: swap entire subList content
+        tpl_sl_m = re.search(r'(<hp:subList(?:\s[^>]*)?>)(.*?)(</hp:subList>)',
+                              filled_cell_template, re.DOTALL)
+        sl_m = re.search(r'(<hp:subList(?:\s[^>]*)?>)(.*?)(</hp:subList>)',
+                          body, re.DOTALL)
+        if not (tpl_sl_m and sl_m):
+            return paragraph_xml, False
+        tpl_inner = re.sub(r'<hp:t>[^<]*</hp:t>',
+                            f'<hp:t>{escaped}</hp:t>',
+                            tpl_sl_m.group(2), count=1)
+        new_body = body[:sl_m.start(2)] + tpl_inner + body[sl_m.end(2):]
+    else:
+        # Empty cell, no template: best-effort inject <hp:t> into existing run
+        new_body = re.sub(r'(<hp:run\s+charPrIDRef="\d+")/>',
+                           rf'\1><hp:t>{escaped}</hp:t></hp:run>',
+                           body, count=1)
+        if new_body == body:
+            new_body = re.sub(
+                r'(<hp:run\s+charPrIDRef="\d+"\s*>)(</hp:run>)',
+                rf'\1<hp:t>{escaped}</hp:t>\2', body, count=1)
+
+    if new_body == body:
+        return paragraph_xml, False
+    return paragraph_xml[:a] + new_body + paragraph_xml[b:], True
+
+
+def append_to_cell_subList(paragraph_xml, col, row, new_lines,
+                            horzsize=38636, vertsize=1200):
+    """Append new ㅇ-bullet paragraphs to the END of a cell's <hp:subList>.
+
+    Reuses the cell's first existing <hp:p>'s paraPrIDRef and charPrIDRef
+    so the new paragraphs match the cell's existing style. All linesegs
+    use ``flags=393216`` (the in-cell convention — using 1441792 for
+    continuation lines triggers Hancom's tamper detection).
+
+    All vertpos values are set to 0; Hancom recomputes layout on open.
+
+    Args:
+        paragraph_xml: Raw XML of a paragraph containing the target cell.
+        col, row: target cellAddr.
+        new_lines: list of strings. Each becomes one ``ㅇ {line}`` paragraph.
+        horzsize: cell content width in HWPX units (default 38636 — adjust
+            for non-default cell widths).
+        vertsize: line height in HWPX units (default 1200 for 12pt body).
+
+    Returns:
+        Modified paragraph_xml. Raises if cell not found.
+    """
+    cell = find_cell(paragraph_xml, col, row)
+    if not cell:
+        raise ValueError(f"cell colAddr={col} rowAddr={row} not found")
+    a, b, body = cell
+    sl_m = re.search(r'(<hp:subList(?:\s[^>]*)?>)(.*?)(</hp:subList>)', body, re.DOTALL)
+    if not sl_m:
+        raise ValueError("cell has no <hp:subList>")
+    sl_inner = sl_m.group(2)
+    p_m = re.search(r'<hp:p\b[^>]*paraPrIDRef="(\d+)"[^>]*>.*?charPrIDRef="(\d+)"',
+                    sl_inner, re.DOTALL)
+    para_pr = p_m.group(1) if p_m else "0"
+    char_pr = p_m.group(2) if p_m else "0"
+
+    spacing = int(vertsize * 0.3)
+    baseline = int(vertsize * 0.85)
+    new_paras = []
+    for line in new_lines:
+        text = f"ㅇ {line}"
+        new_paras.append(
+            f'<hp:p id="2147483648" paraPrIDRef="{para_pr}" styleIDRef="0" '
+            'pageBreak="0" columnBreak="0" merged="0">'
+            f'<hp:run charPrIDRef="{char_pr}"><hp:t>{xml_escape(text)}</hp:t></hp:run>'
+            '<hp:linesegarray>'
+            f'<hp:lineseg textpos="0" vertpos="0" vertsize="{vertsize}" '
+            f'textheight="{vertsize}" baseline="{baseline}" spacing="{spacing}" '
+            f'horzpos="0" horzsize="{horzsize}" '
+            f'flags="{IN_CELL_LINESEG_FLAGS}"/>'
+            '</hp:linesegarray></hp:p>'
+        )
+
+    new_sl_inner = sl_inner + ''.join(new_paras)
+    new_body = body[:sl_m.start(2)] + new_sl_inner + body[sl_m.end(2):]
+    return paragraph_xml[:a] + new_body + paragraph_xml[b:]
+
+
+def replace_cell_subList(paragraph_xml, col, row, new_lines,
+                          horzsize=38636, vertsize=1200):
+    """Replace the entire <hp:subList> content of a cell with new ㅇ paragraphs.
+
+    Same shape as append_to_cell_subList but REPLACES rather than appends.
+    Reuses paraPrIDRef/charPrIDRef from the cell's first existing <hp:p>.
+
+    Use this when rebuilding a cell from scratch (e.g., when populating a
+    cloned-template cell with new content). For ADDING to existing content,
+    prefer append_to_cell_subList().
+
+    Returns:
+        Modified paragraph_xml. Raises if cell not found.
+    """
+    cell = find_cell(paragraph_xml, col, row)
+    if not cell:
+        raise ValueError(f"cell colAddr={col} rowAddr={row} not found")
+    a, b, body = cell
+    sl_m = re.search(r'(<hp:subList(?:\s[^>]*)?>)(.*?)(</hp:subList>)', body, re.DOTALL)
+    if not sl_m:
+        raise ValueError("cell has no <hp:subList>")
+    sl_inner = sl_m.group(2)
+    p_m = re.search(r'<hp:p\b[^>]*paraPrIDRef="(\d+)"[^>]*>.*?charPrIDRef="(\d+)"',
+                    sl_inner, re.DOTALL)
+    para_pr = p_m.group(1) if p_m else "0"
+    char_pr = p_m.group(2) if p_m else "0"
+
+    spacing = int(vertsize * 0.3)
+    baseline = int(vertsize * 0.85)
+    new_paras = []
+    for line in new_lines:
+        text = f"ㅇ {line}"
+        new_paras.append(
+            f'<hp:p id="2147483648" paraPrIDRef="{para_pr}" styleIDRef="0" '
+            'pageBreak="0" columnBreak="0" merged="0">'
+            f'<hp:run charPrIDRef="{char_pr}"><hp:t>{xml_escape(text)}</hp:t></hp:run>'
+            '<hp:linesegarray>'
+            f'<hp:lineseg textpos="0" vertpos="0" vertsize="{vertsize}" '
+            f'textheight="{vertsize}" baseline="{baseline}" spacing="{spacing}" '
+            f'horzpos="0" horzsize="{horzsize}" '
+            f'flags="{IN_CELL_LINESEG_FLAGS}"/>'
+            '</hp:linesegarray></hp:p>'
+        )
+
+    new_sl_inner = ''.join(new_paras)
+    new_body = body[:sl_m.start(2)] + new_sl_inner + body[sl_m.end(2):]
+    return paragraph_xml[:a] + new_body + paragraph_xml[b:]
+
+
+# ============================================================================
 # Paragraph Operations
 # ============================================================================
 

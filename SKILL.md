@@ -204,6 +204,36 @@ These rules were discovered through production failures where generated files we
 - **Solution**: 원본과 동일한 `compress_type`을 엔트리별로 보존한다. `mimetype`은 반드시 `STORED`, 나머지는 원본의 압축방식을 따른다.
 - **Implementation**: `zip_handler.py`가 원본 ZIP 엔트리 메타데이터를 기록하고, 재패키징 시 동일한 `compress_type` 적용.
 
+### Rule 14: Table `<hp:sz height>` Must Match cellSz Row Heights
+- **Problem**: 행을 추가/삭제한 뒤 `rowCnt`, `cellAddr`만 갱신하고 `<hp:tbl>`의 외부 `<hp:sz height="N">`을 그대로 두면 한컴오피스가 파일 열기 자체를 실패시킨다(XML 형식은 well-formed이지만 한컴이 거부). 증상: `validate_wellformed`은 통과하지만 한컴이 열리지 않음.
+- **Rule**: `<hp:sz height>` 는 모든 행의 col-0 `<hp:cellSz height>` 합과 정확히 일치해야 한다.
+- **Solution**: `table_fixer.fix_table()` 가 자동으로 `<hp:sz height>`를 col-0 cellSz 합으로 갱신한다. 행 추가 코드에서 별도로 신경 쓸 필요 없다 — `fix_table()`만 호출하면 된다.
+- **Validation**: `table_fixer.validate_table()`이 `sz.height` 필드 불일치를 명시적으로 보고한다.
+
+### Rule 15: In-Cell Lineseg Flags Must Be 393216 (FIRST_LINE)
+- **Problem**: `<hp:tc>` 내부 단락에서 줄바꿈 시 `<hp:lineseg flags="1441792">` (FLAGS_CONTINUATION, 본문 단락 컨벤션)을 사용하면 한컴이 파일을 변조된 것으로 표시한다. 본문 단락(table 바깥)에서는 1441792가 정상이지만 셀 안에서는 다르다.
+- **Rule**: `<hp:tc>` 안 모든 `<hp:lineseg>`는 (첫줄·연속줄 무관) `flags="393216"` 사용.
+- **Solution**: `modify_hwpx.IN_CELL_LINESEG_FLAGS = 393216` 상수와 `append_to_cell_subList()`, `replace_cell_subList()` 가 이를 자동 적용한다.
+- **Origin**: 본문 단락은 `FLAGS_FIRST_LINE=393216` + `FLAGS_CONTINUATION=1441792` 둘 다 사용하지만, 셀 내부는 한컴이 단일 단락처럼 처리하여 모든 줄을 FIRST_LINE으로 표기.
+
+### Rule 16: Empty-Cell Text Injection Requires subList Swap
+- **Problem**: 빈 셀(`<hp:run charPrIDRef="X"/>`, `<hp:t>` 없음)에 인라인으로 `<hp:t>NEW</hp:t>`를 추가하면, 그 셀의 paraPr/charPr이 "빈 셀용"(작은 크기·투명 등)이라 텍스트가 비정상적으로 렌더링된다.
+- **Rule**: 같은 행의 채워진 셀(filled cell)의 `<hp:subList>` 내용을 통째로 복사한 뒤 `<hp:t>` 텍스트만 교체한다.
+- **Solution**: `modify_hwpx.set_cell_text(... filled_cell_template=...)`이 자동 처리. 채워진 셀 본문을 `filled_cell_template`로 전달하면 빈 셀일 때는 subList를 swap, 채워진 셀일 때는 단순 텍스트 교체.
+
+### Rule 17: Hancom Tamper Detection on Section-Level Insertions
+- **Symptom**: "문서가 손상되었거나 변조되었을 가능성이 있습니다. 이 문서를 불러오려면 [문서 보안 설정]을 [낮음]으로 설정해야 합니다." 경고. XML도 well-formed, 모든 reference도 유효한데 한컴이 거부.
+- **Empirical Trigger**: **새 표 단락(self-contained `<hp:p>` containing `<hp:tbl>`)을 섹션 레벨에 삽입** + 같은 섹션의 **다른 어떤 변경**이라도 함께 있으면 트리거. 단독 삽입은 통과. 다른 변경 단독도 통과. 둘이 합쳐졌을 때만 발생.
+- **What's safe (R-style)**:
+  - 새 단락 삽입 (텍스트 본문, ㅇ·- 마커 등, 표 없음): OK
+  - 기존 표의 행 추가 (in-place table row insertion): OK
+  - 기존 셀의 텍스트 변경 / `<hp:subList>` 내용 추가·교체: OK
+  - 위 셋의 임의 조합: OK
+- **What triggers**:
+  - 새 표 단락 삽입 + 위 R-style 변경 중 하나 이상: TRIGGER
+- **Workaround**: 새 표를 만들지 말고, 기존 가까운 표/단락의 내용을 확장(append) 한다. 예: 새 요구사항을 별도 표로 추가하는 대신, 기존 마지막 요구사항 표의 `세부 내용` 셀(`<hp:subList>`)에 ㅇ 항목으로 append. `modify_hwpx.append_to_cell_subList()` 가 이 패턴을 지원.
+- **Last resort**: 사용자가 한컴 환경설정에서 **문서 보안 설정 → 낮음** 으로 변경하면 외부 편집 파일도 경고 없이 열림 (일회성 설정 변경).
+
 ## Module Architecture
 
 The HWPX skill uses a modular architecture. `generate_hwpx.py` handles new document creation from config JSON. The following modules handle reading and modifying existing HWPX files:
@@ -226,6 +256,12 @@ The HWPX skill uses a modular architecture. `generate_hwpx.py` handles new docum
   - `insert_table_row(section_bytes, table_pattern, row_xml, position)` → 테이블 행 삽입
   - `delete_paragraph(section_bytes, para_pattern)` → 문단 삭제
   - `update_section(hwpx_path, section_name, modifier_fn, output_path)` → 섹션 단위 수정 + ZIP 재패키징
+- **Cell-content helpers (Rules 15-17)**:
+  - `find_cell(paragraph_xml, col, row)` → 단락 안의 `<hp:tc>` 위치/본문 반환 (중첩 테이블 안전)
+  - `set_cell_text(paragraph_xml, col, row, new_text, filled_cell_template=None)` → 셀 텍스트 설정. 빈 셀에는 `filled_cell_template`의 subList를 복제하여 올바른 paraPr/charPr 사용 (Rule 16)
+  - `append_to_cell_subList(paragraph_xml, col, row, new_lines, ...)` → 셀의 `<hp:subList>` 끝에 ㅇ-bullet 단락 추가. **Rule 17의 권장 패턴** — 새 표를 추가하는 대신 기존 셀을 확장.
+  - `replace_cell_subList(paragraph_xml, col, row, new_lines, ...)` → 셀 subList 전체 교체
+  - 두 helper 모두 `flags=393216` 강제 적용 (Rule 15) + `vertpos=0` (한컴이 재계산)
 - **Constraint**: 모든 수정은 `str.replace()` 또는 정규식으로 원본 바이트에 직접 수행. DOM 직렬화 금지.
 
 ### scripts/xml_templates.py — XML Template Extraction & String Substitution
@@ -238,16 +274,17 @@ The HWPX skill uses a modular architecture. `generate_hwpx.py` handles new docum
 - **Constraint**: `etree.tostring()` 금지 — 템플릿은 문자열이며, `str.format()` 또는 `str.replace()`로 값 주입
 
 ### scripts/table_fixer.py — Table Consistency Validator & Auto-Fixer
-- **Purpose**: 테이블의 rowCnt/cellAddr/rowAddr 정합성을 자동 검증하고 수정
+- **Purpose**: 테이블의 rowCnt/cellAddr/rowAddr/sz-height 정합성을 자동 검증하고 수정
 - **Key Functions**:
-  - `validate_table(table_xml_bytes)` → 테이블 정합성 검증 (rowCnt, colAddr, rowAddr — colSpan/rowSpan 고려)
-  - `fix_table(table_xml_bytes)` → rowCnt, cellAddr, rowAddr 자동 수정 (2D 점유 그리드 사용)
+  - `validate_table(table_xml_bytes)` → 테이블 정합성 검증 (rowCnt, colAddr, rowAddr, sz.height)
+  - `fix_table(table_xml_bytes)` → rowCnt, cellAddr, rowAddr, sz.height 자동 수정
   - `validate_all_tables(section_bytes)` → 섹션 내 모든 테이블 일괄 검증
   - `fix_all_tables(section_bytes)` → 섹션 내 모든 테이블 일괄 수정
 - **Validation Rules**:
   - `rowCnt` == 실제 `<hp:tr>` 개수
   - `rowAddr` == `row_idx` (0-based)
   - `colAddr` == 논리적 그리드 열 위치 (colSpan 누적 + rowSpan 점유 열 건너뜀)
+  - **`<hp:sz height>`** == col-0 `<hp:cellSz height>` 합 (Rule 14 — Hancom enforces this)
   - 중첩 테이블의 cellSpan은 무시 (마지막 `</hp:subList>` 이후 메타데이터만 검색)
   - 수정은 정규식으로 속성값만 교체 (XML 구조 보존)
 

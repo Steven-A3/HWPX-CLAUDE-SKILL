@@ -209,13 +209,57 @@ def _build_occupied_sets(rows_addrs):
     return occupied_sets
 
 
+def _extract_table_sz_height(table_xml):
+    """Extract the table's outer <hp:sz height="…"> value.
+
+    Returns (start, end, value) tuple of the `height="N"` attribute, or
+    None if not found. Searches only in the FIRST <hp:sz …/> directly
+    inside the outermost <hp:tbl> (skips nested tables).
+    """
+    # Find the FIRST <hp:sz …/> element after the opening <hp:tbl …> tag and
+    # before any nested <hp:tbl>. We look only inside the first ~2000 chars
+    # of the table XML where the outer <hp:sz> appears.
+    head_end = min(len(table_xml), 4000)
+    head = table_xml[:head_end]
+    m = re.search(r'<hp:sz\s+width="\d+"\s+widthRelTo="ABSOLUTE"\s+height="(\d+)"',
+                  head)
+    if not m:
+        return None
+    return m.start(1), m.end(1), int(m.group(1))
+
+
+def _sum_col0_row_heights(table_xml):
+    """Sum the cellSz height of every col-0 cell, one per row.
+
+    Hancom enforces ``<hp:sz height>`` == sum of cellSz row heights. Since
+    every row has a cell at colAddr=0, we use those as the per-row heights.
+
+    Returns the sum (int), or None if heights cannot be determined.
+    """
+    # Match: <hp:tc …>…<hp:cellAddr colAddr="0" rowAddr="N"…>…<hp:cellSz width="W" height="H"…
+    heights = []
+    for m in re.finditer(
+        r'<hp:cellAddr\s+colAddr="0"\s+rowAddr="\d+"[^/]*/>'
+        r'[^<]*(?:<hp:cellSpan[^/]*/>[^<]*)?'
+        r'<hp:cellSz\s+width="\d+"\s+height="(\d+)"',
+        table_xml):
+        heights.append(int(m.group(1)))
+    if not heights:
+        return None
+    return sum(heights)
+
+
 def validate_table(table_xml):
-    """Validate a single table's rowCnt, cellAddr, and rowAddr consistency.
+    """Validate a single table's rowCnt, cellAddr, rowAddr, and sz height.
 
     Handles merged cells correctly by validating per-row rather than
     assuming a flat colCnt cells per row. Also accounts for rowSpan:
     cells in subsequent rows must skip columns occupied by rowSpan
     cells from earlier rows.
+
+    Also validates that ``<hp:sz height>`` equals the sum of col-0 cellSz
+    heights (Hancom rejects files where this is inconsistent — symptom is
+    the "structurally OK but Hancom won't open" failure mode).
 
     Args:
         table_xml: Raw XML string of a single <hp:tbl>...</hp:tbl> element.
@@ -233,6 +277,16 @@ def validate_table(table_xml):
         errors.append(TableValidationError(
             0, 'rowCnt', actual_rows, row_cnt_attr,
             f'colCnt={col_cnt}'))
+
+    # sz height consistency (Hancom enforces this)
+    sz_info = _extract_table_sz_height(table_xml)
+    expected_height = _sum_col0_row_heights(table_xml)
+    if sz_info is not None and expected_height is not None:
+        _, _, actual_height = sz_info
+        if actual_height != expected_height:
+            errors.append(TableValidationError(
+                0, 'sz.height', expected_height, actual_height,
+                'sum of col-0 cellSz heights'))
 
     if col_cnt is not None:
         rows_addrs = _extract_cell_addrs_by_row(table_xml)
@@ -321,6 +375,15 @@ def fix_table(table_xml):
     # Apply corrections in reverse order to preserve offsets
     for start, end, new_fragment in reversed(corrections):
         result = result[:start] + new_fragment + result[end:]
+
+    # Fix <hp:sz height> to match sum of col-0 cellSz heights.
+    # Hancom rejects files where these don't match.
+    sz_info = _extract_table_sz_height(result)
+    expected_height = _sum_col0_row_heights(result)
+    if sz_info is not None and expected_height is not None:
+        start, end, actual_height = sz_info
+        if actual_height != expected_height:
+            result = result[:start] + str(expected_height) + result[end:]
 
     return result
 

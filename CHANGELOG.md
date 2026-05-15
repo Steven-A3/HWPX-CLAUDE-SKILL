@@ -1,5 +1,92 @@
 # CHANGELOG
 
+## [0.8.0] - 2026-05-15
+
+### Production-driven hardening: in-cell edits + Hancom tamper detection
+
+Adds in-cell editing helpers, fixes the table `<hp:sz height>` invariant that
+Hancom enforces, and documents the empirically-derived rule that prevents the
+"문서 보안 설정을 낮음으로 설정해야 합니다" tamper warning. All findings come from
+a real failure mode encountered while inserting CAR-01..05 requirement tables
+into an existing 제안요청서 — 10 rounds of bisection to land the fix.
+
+### New rules in `SKILL.md`
+
+- **Rule 14 — `<hp:sz height>` must equal sum of col-0 cellSz heights.** When
+  you add/remove rows, this invariant breaks and Hancom fails to open the
+  file (XML still well-formed). Symptom: "문서가 손상되었거나 변조되었을 가능성".
+- **Rule 15 — In-cell linesegs must use `flags="393216"` for every line.** Body
+  paragraphs use `393216` (first) + `1441792` (continuation), but inside
+  `<hp:tc>` Hancom expects `393216` on every line — `1441792` triggers tamper
+  detection.
+- **Rule 16 — Empty-cell text injection requires `<hp:subList>` swap.** Empty
+  cells use a "placeholder" paraPr/charPr that renders text invisibly. Injecting
+  `<hp:t>` inline preserves those styles. Swap the entire subList content
+  from a filled cell template instead.
+- **Rule 17 — Hancom tamper detection on section-level table insertions.**
+  Empirically: inserting **a new self-contained table** at the section level +
+  **any other modification** in the same section triggers the tamper warning.
+  Workaround: extend the nearest existing cell's `<hp:subList>` with new
+  ㅇ-bullet paragraphs (append, don't insert a new table). Last resort: user
+  lowers 한컴 문서 보안 설정 to 낮음.
+
+### `scripts/table_fixer.py`
+
+- `validate_table()` now reports a `sz.height` error when the table's outer
+  `<hp:sz height>` doesn't equal the sum of col-0 cellSz heights.
+- `fix_table()` now auto-updates `<hp:sz height>` to match.
+- These changes flow into `validate_all_tables` / `fix_all_tables` and the
+  auto-fix invocation inside `insert_table_row` / `delete_table_row`, so
+  callers that already use those don't need code changes.
+
+### `scripts/modify_hwpx.py` — new cell-content helpers
+
+Four new functions for editing cells without triggering Hancom's tamper
+heuristic. All emit `flags=393216` (Rule 15) and `vertpos=0` (Hancom recomputes
+layout on open):
+
+- `find_cell(paragraph_xml, col, row)` — nesting-safe `<hp:tc>` locator. Returns
+  `(start, end, body)` or `None`. Used internally by the helpers and exposed
+  for callers that need direct cell access. Accepts both `<hp:tc>` and
+  `<hp:tc attr=...>` forms.
+- `set_cell_text(paragraph_xml, col, row, new_text, filled_cell_template=None)`
+  — sets the cell's text. For filled cells (cell has `<hp:t>`), replaces in
+  place. For empty cells, optionally uses `filled_cell_template`'s subList
+  structure (Rule 16) so the text renders with the correct paraPr/charPr.
+- `append_to_cell_subList(paragraph_xml, col, row, new_lines, horzsize=…, vertsize=…)`
+  — appends `ㅇ {line}` paragraphs to the END of a cell's `<hp:subList>`,
+  inheriting paraPr/charPr from the cell's first existing `<hp:p>`. **This is
+  the Rule 17 workaround** — extend existing cells instead of inserting new
+  tables.
+- `replace_cell_subList(paragraph_xml, col, row, new_lines, …)` — replaces the
+  cell's entire subList with new `ㅇ`-bullet paragraphs. Same shape as
+  `append_to_cell_subList` but destructive (drops original content).
+- `IN_CELL_LINESEG_FLAGS = 393216` — exported constant documenting Rule 15.
+
+### Tests (`tests/test_cell_helpers_and_sz_height.py`, 15 tests)
+
+- **Table sz-height invariant (4 tests)** — validate detects mismatch / fix
+  updates value / fix-after-row-addition end-to-end.
+- **`find_cell` + `set_cell_text` (5 tests)** — found-by-address, XML escaping,
+  filled vs empty cell with template (Rule 16 round-trip).
+- **`append_to_cell_subList` + `replace_cell_subList` (6 tests)** — all linesegs
+  use `flags=393216` (Rule 15), all vertpos=0, append preserves originals,
+  replace drops them, constant matches.
+
+Total test count: 46/46 pass (22 v0.6.0 baseline + 9 v0.7.0 marker styles +
+15 v0.8.0 cell helpers).
+
+### Diff stats
+
+```
+ SKILL.md                                |  ~45 +/-
+ scripts/modify_hwpx.py                  | ~200 +/-
+ scripts/table_fixer.py                  |  ~50 +/-
+ tests/test_cell_helpers_and_sz_height.py| ~290 +/-
+```
+
+---
+
 ## [0.7.0] - 2026-05-14
 
 ### Template-faithful marker styles (□ / ㅇ / -) — 165 % line-spacing band
