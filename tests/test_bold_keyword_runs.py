@@ -84,10 +84,14 @@ class TestFindBoldTwin(unittest.TestCase):
         return m is not None and '<hh:bold' in m.group(0)
 
     def test_exact_twin_found_and_is_true_twin(self):
-        # Base 38 (paragraph) has an exact bold twin in the bundled template.
+        # Base 38 (paragraph) has exactly one bold twin (71) in the template.
         twin = G._find_bold_twin(self.header, "38")
-        self.assertNotEqual(twin, "38")
-        self.assertTrue(self._has_bold(twin))
+        self.assertEqual(twin, "71")
+        # The twin must be a TRUE twin: identical to the base except <hh:bold/>.
+        base_xml = re.search(r'<hh:charPr id="38".*?</hh:charPr>', self.header, re.DOTALL).group(0)
+        twin_xml = re.search(r'<hh:charPr id="%s".*?</hh:charPr>' % twin, self.header, re.DOTALL).group(0)
+        self.assertIn('<hh:bold', twin_xml)
+        self.assertEqual(G._charpr_canonical(base_xml), G._charpr_canonical(twin_xml))
 
     def test_no_twin_returns_base(self):
         # A fabricated id with no twin returns the base unchanged.
