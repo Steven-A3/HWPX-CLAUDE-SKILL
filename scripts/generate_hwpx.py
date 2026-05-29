@@ -89,6 +89,48 @@ def estimate_text_width(text, char_height):
     return sum(_char_width(ch, char_height) for ch in text)
 
 
+# Minimum table column width (~2 Korean glyphs + L/R cell margins) in HWPUNIT.
+MIN_COL_WIDTH = 3000
+
+
+def _compute_column_widths(headers, rows, char_height, total_width,
+                           min_col_width=MIN_COL_WIDTH, h_margin=1020):
+    """Compute per-column widths from content, fitted to total_width.
+
+    Width of a column = max rendered text width of its header and body cells
+    (plus horizontal cell margins), floored at min_col_width, then scaled so the
+    widths sum exactly to total_width. Returns a list of ints (len == #columns).
+    """
+    n = len(headers)
+    if n == 0:
+        return []
+    intrinsic = []
+    for j in range(n):
+        texts = [headers[j]] + [str(r[j]) for r in rows if j < len(r)]
+        w = max((estimate_text_width(t, char_height) for t in texts), default=0)
+        intrinsic.append(max(min_col_width, w + h_margin))
+    total_int = sum(intrinsic)
+    if total_int <= total_width:
+        slack = total_width - total_int
+        widths = [iw + slack * iw // total_int for iw in intrinsic]
+        diff = total_width - sum(widths)
+        widest = max(range(n), key=lambda j: widths[j])
+        widths[widest] += diff
+    else:
+        # Scale intrinsic weights proportionally; apply floor only when possible.
+        raw = [iw * total_width // total_int for iw in intrinsic]
+        # If every raw value is already at or above the floor the sum fits.
+        if all(r >= min_col_width for r in raw):
+            widths = raw
+            diff = total_width - sum(widths)
+            widest = max(range(n), key=lambda j: widths[j])
+            widths[widest] += diff
+        else:
+            # Floor takes priority; sum may exceed total_width when space is tight.
+            widths = [max(min_col_width, r) for r in raw]
+    return widths
+
+
 # Bold proportional glyphs render wider; Hangul/CJK keep fixed em width.
 BOLD_WIDTH_FACTOR = 1.1
 
