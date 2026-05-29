@@ -1,5 +1,5 @@
 {
-  "template_hash": "f8ad50e53a3aa9c8688d1ea918987bd3658013e2d9ab0cf0af4ec83dd91594f6",
+  "template_hash": "84361544592cd9e7083a78cc964eed053888de4de246bc04c4a6f1e41c1d613c",
   "style_map": {
     "heading_marker": [
       "298",
@@ -265,6 +265,11 @@
       2040,
       1680
     ],
+    "paragraph_bold": "71",
+    "bullet_bold": "71",
+    "dash_bold": "547",
+    "star_bold": "548",
+    "note_bold": "71",
     "bf_none": "1",
     "bf_table": "88",
     "bf_gradient_top": "221",
