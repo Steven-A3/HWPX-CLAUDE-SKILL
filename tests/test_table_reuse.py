@@ -212,6 +212,11 @@ class TestEndToEndTable(unittest.TestCase):
             body = "".join(zf.read(n).decode("utf-8") for n in secs)
         m = re.search(r'<hp:tbl[^>]*colCnt="%d"' % ncols, body)
         self.assertIsNotNone(m, "generated table with expected colCnt not found")
+        # confirm the profile path actually rendered all N columns in this table
+        tbl_slice = body[m.start():m.start() + 20000]
+        first_tr = re.search(r'<hp:tr>(.*?)</hp:tr>', tbl_slice, re.DOTALL).group(1)
+        self.assertEqual(len(re.findall(r'<hp:tc\b', first_tr)), ncols,
+                         "header row should render exactly ncols cells")
 
 
 if __name__ == "__main__":
