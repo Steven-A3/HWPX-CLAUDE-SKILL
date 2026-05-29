@@ -97,9 +97,12 @@ def _compute_column_widths(headers, rows, char_height, total_width,
                            min_col_width=MIN_COL_WIDTH, h_margin=1020):
     """Compute per-column widths from content, fitted to total_width.
 
-    Width of a column = max rendered text width of its header and body cells
-    (plus horizontal cell margins), floored at min_col_width, then scaled so the
-    widths sum exactly to total_width. Returns a list of ints (len == #columns).
+    Per-column intrinsic width = max rendered text width of header+body cells
+    (+ h_margin), floored at min_col_width. Then water-fill: fix columns at the
+    floor and distribute the remaining budget proportionally among the rest, so
+    the widths sum EXACTLY to total_width whenever that is feasible
+    (n*min_col_width <= total_width). When infeasible, every column sits at the
+    floor and the sum necessarily exceeds total_width. Returns list of ints.
     """
     n = len(headers)
     if n == 0:
@@ -109,25 +112,34 @@ def _compute_column_widths(headers, rows, char_height, total_width,
         texts = [headers[j]] + [str(r[j]) for r in rows if j < len(r)]
         w = max((estimate_text_width(t, char_height) for t in texts), default=0)
         intrinsic.append(max(min_col_width, w + h_margin))
-    total_int = sum(intrinsic)
-    if total_int <= total_width:
-        slack = total_width - total_int
-        widths = [iw + slack * iw // total_int for iw in intrinsic]
-        diff = total_width - sum(widths)
-        widest = max(range(n), key=lambda j: widths[j])
-        widths[widest] += diff
-    else:
-        # Scale intrinsic weights proportionally; apply floor only when possible.
-        raw = [iw * total_width // total_int for iw in intrinsic]
-        # If every raw value is already at or above the floor the sum fits.
-        if all(r >= min_col_width for r in raw):
-            widths = raw
+
+    widths = [0] * n
+    fixed = [False] * n
+    remaining = total_width
+    while True:
+        free = [j for j in range(n) if not fixed[j]]
+        if not free:
+            break
+        free_intrinsic = sum(intrinsic[j] for j in free)
+        if free_intrinsic <= 0:
+            for j in free:
+                widths[j] = max(min_col_width, remaining // len(free))
+            break
+        for j in free:
+            widths[j] = remaining * intrinsic[j] // free_intrinsic
+        newly_fixed = False
+        for j in free:
+            if widths[j] < min_col_width:
+                widths[j] = min_col_width
+                fixed[j] = True
+                remaining -= min_col_width
+                newly_fixed = True
+        if not newly_fixed:
+            # all free columns >= floor; assign rounding remainder to widest free
             diff = total_width - sum(widths)
-            widest = max(range(n), key=lambda j: widths[j])
+            widest = max(free, key=lambda j: widths[j])
             widths[widest] += diff
-        else:
-            # Floor takes priority; sum may exceed total_width when space is tight.
-            widths = [max(min_col_width, r) for r in raw]
+            break
     return widths
 
 
@@ -1890,7 +1902,7 @@ def _row_height(texts, widths, char_h, base_h, margin):
     max_lines = 1
     for t, w in zip(texts, widths):
         if t:
-            max_lines = max(max_lines, estimate_line_count(t, char_h, max(w - 1022, 0)))
+            max_lines = max(max_lines, estimate_line_count(t, char_h, max(w - (margin["left"] + margin["right"]) - 2, 0)))
     computed = max_lines * char_h + (max_lines - 1) * 360 + margin["top"] + margin["bottom"]
     return max(base_h, computed)
 
@@ -1964,6 +1976,7 @@ def data_table_xml(headers, rows, sm, caption="", table_id=1974981391):
     if prof:
         return _data_table_from_profile(headers, rows, prof, sm, caption, table_id)
 
+    print(f"Warning: no table profile for {num_cols}-column table; using generated fallback.")
     # ---- fallback: generated table (original behavior, content-aware widths) ----
     num_rows = len(rows) + 1
     total_width = 47622

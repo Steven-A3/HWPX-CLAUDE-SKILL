@@ -44,6 +44,19 @@ class TestColumnWidths(unittest.TestCase):
         self.assertGreater(sum(w), 4000)
         self.assertTrue(all(c >= G.MIN_COL_WIDTH for c in w))
 
+    def test_feasible_long_plus_short_sums_exactly(self):
+        # one long column + several short ones (a common 개조식 shape) must still
+        # sum EXACTLY to total_width (regression for the overshoot bug)
+        headers = ["설명" * 100, "a", "b", "c", "d", "e"]
+        rows = [["내용", "1", "2", "3", "4", "5"]]
+        w = G._compute_column_widths(headers, rows, 1200, 48964)
+        self.assertEqual(sum(w), 48964)
+        self.assertTrue(all(c >= G.MIN_COL_WIDTH for c in w))
+
+    def test_long_column_gets_most_width(self):
+        w = G._compute_column_widths(["설명" * 100, "a", "b"], [["x", "y", "z"]], 1200, 48964)
+        self.assertEqual(max(range(3), key=lambda j: w[j]), 0)  # the long col is widest
+
 
 class TestRichCellExtractor(unittest.TestCase):
     def setUp(self):
@@ -189,6 +202,15 @@ class TestProfileDrivenTable(unittest.TestCase):
         trs = re.findall(r'<hp:tr>(.*?)</hp:tr>', xml, re.DOTALL)
         body_fills = re.findall(r'borderFillIDRef="(\d+)"', trs[-1])
         self.assertEqual(body_fills, [c["bf"] for c in prof["last"]])
+
+    def test_row_height_uses_margin_for_wrapping(self):
+        # wider margins -> narrower inner width -> more wrapped lines -> taller row.
+        # (regression: _row_height must use the profile margin, not a literal 1022)
+        narrow = G._row_height(["가" * 40], [10000], 1200, 2048,
+                               {"left": 510, "right": 510, "top": 141, "bottom": 141})
+        wide = G._row_height(["가" * 40], [10000], 1200, 2048,
+                             {"left": 3000, "right": 3000, "top": 141, "bottom": 141})
+        self.assertGreater(wide, narrow)
 
 
 class TestEndToEndTable(unittest.TestCase):
