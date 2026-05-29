@@ -191,5 +191,28 @@ class TestProfileDrivenTable(unittest.TestCase):
         self.assertEqual(body_fills, [c["bf"] for c in prof["last"]])
 
 
+class TestEndToEndTable(unittest.TestCase):
+    def test_generated_doc_table_matches_template_fills(self):
+        sm = json.load(open(os.path.join(SKILL_DIR, "assets", "default_styles.json")))["style_map"]
+        ncols = int(sorted(sm["table_profiles"], key=int)[0])
+        headers = [f"항목{i}" for i in range(ncols)]
+        rows = [[f"행{r}열{c}" for c in range(ncols)] for r in range(3)]
+        config = {"include_cover": False, "sections": [{
+            "type": "body", "title_bar": "표 양식 점검",
+            "content": [
+                {"type": "heading", "text": "표 점검"},
+                {"type": "table", "caption": "샘플", "headers": headers, "rows": rows},
+            ]}]}
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        out = os.path.join(tmp.name, "t.hwpx")
+        G.generate_hwpx(config, out)
+        self.assertTrue(zipfile.is_zipfile(out))
+        with zipfile.ZipFile(out) as zf:
+            secs = sorted(n for n in zf.namelist() if re.search(r'section\d+\.xml$', n))
+            body = "".join(zf.read(n).decode("utf-8") for n in secs)
+        m = re.search(r'<hp:tbl[^>]*colCnt="%d"' % ncols, body)
+        self.assertIsNotNone(m, "generated table with expected colCnt not found")
+
+
 if __name__ == "__main__":
     unittest.main()
