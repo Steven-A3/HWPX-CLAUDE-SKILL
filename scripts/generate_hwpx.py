@@ -691,6 +691,10 @@ def _build_table_profile_catalog(body_section_xml, header_xml):
         if prof is None:
             continue
         key = str(len(prof["header"]))
+        # Known limitation: keeps the FIRST clean table per column count. This is
+        # order-dependent; the uniform-interior guard in _build_table_profile is
+        # what prevents a decorative/striped table from being chosen. If a future
+        # template needs different selection, score candidates instead of first-wins.
         if key not in catalog:
             catalog[key] = prof
     return catalog
