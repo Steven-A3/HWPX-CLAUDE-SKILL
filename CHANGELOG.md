@@ -1,5 +1,44 @@
 # CHANGELOG
 
+## [0.9.0] - 2026-05-27
+
+### MS_YOON template adoption + 붙임/참고 title fix
+
+Adopts the MS_YOON 이노베이션아카데미 standard report as the engine template and
+fixes a bug where attachment (붙임/참고) bar titles were silently dropped.
+
+### Fixed
+
+- **Dropped 붙임/참고 title.** `inject_appendix_labels()` assumed the bar's title
+  cell had two `<hp:t>` runs (space + title) and wrote a bare space into the only
+  run on single-run cells — silently losing the title. Real templates (old and
+  MS_YOON) use a single combined run; injection now handles single- and two-run
+  cells. Regression test added.
+
+### Added
+
+- **Empty-title guard.** An `appendix` section without `appendix_title` now raises
+  `ValueError` instead of shipping an empty bar.
+- **Marker-based body/heading detection** (`_count_body_headings`): the body
+  section and cover-page checks count `□` headings by marker text instead of
+  `styleIDRef="15"`, so templates that use other style IDs (MS_YOON uses 14/54)
+  are detected correctly and never mistaken for a cover page.
+- **Appendix-bar style discovery** (`_find_appendix_bar_para_idx`): the 붙임/참고
+  styles are discovered from the actual 1×3 bar (col-0 text `붙임`/`참고`) rather
+  than "first colPr paragraph", which on single-section templates is the main
+  title bar.
+- **Single-section template support:** when a template has no distinct appendix
+  section, the body section doubles as the appendix skeleton source.
+
+### Changed
+
+- **Bundled template** (`assets/template.hwpx`) is now the MS_YOON 이노베이션아카데미
+  report (real fonts, main title bar, 붙임/참고 bars). `default_styles.json`
+  regenerated. The old template remains recoverable from git history.
+- **Canonical example** (`examples/sample_report.json`) is now a 본문 + 붙임
+  (title filled) document. `SKILL.md` documents the structure and the required
+  `appendix_title`.
+
 ## [0.8.0] - 2026-05-15
 
 ### Production-driven hardening: in-cell edits + Hancom tamper detection

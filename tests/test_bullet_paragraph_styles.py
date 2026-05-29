@@ -3,8 +3,14 @@
 
 These tests verify that ``assets/default_styles.json`` and the marker-style
 discovery in ``scripts/generate_hwpx.py`` map □/ㅇ/-/* paragraphs to the
-template's most-common 165% line-spacing paraPr, and that generated
-documents preserve those values.
+template's most-common marker paraPr, and that generated documents preserve
+those values.
+
+Values are pinned to the bundled MS_YOON 이노베이션아카데미 template:
+  heading(□) → paraPr 210 (LEFT, 180% LS, 내어쓰기)
+  bullet(ㅇ) → paraPr 87  (JUSTIFY, 160% LS, 내어쓰기)
+  dash(-)    → paraPr 260 (JUSTIFY, 150% LS, 내어쓰기)
+  star(*)    → paraPr 83  (JUSTIFY, 145% LS, 내어쓰기)
 """
 
 import json
@@ -99,39 +105,29 @@ class TestParaPrExistence(unittest.TestCase):
                     f"{key} → paraPr {pp} not found in header.xml")
 
 
-class TestScreenshotDialogFilter(unittest.TestCase):
-    """The user's screenshot shows JUSTIFY / 165% / 0pt margins / hanging indent.
-
-    Filtering header.xml's paraPrs by that exact dialog state must yield
-    exactly one match: paraPr 43 (the dominant - dash paraPr). This anchors
-    the screenshot identity without depending on the HWPUNIT-to-pt
-    conversion.
+class TestDashParaPrHangingIndent(unittest.TestCase):
+    """The discovered dash (-) paraPr must have the government-report dash
+    shape: JUSTIFY alignment, a hanging indent (HwpUnitChar 내어쓰기, intent
+    < 0), and zero side/spacing margins. Template-agnostic — guards that
+    discovery never picks a non-hanging or wrong-aligned dash paraPr.
     """
 
-    def test_screenshot_dialog_state_matches_only_paraPr_43(self):
+    def test_dash_paraPr_has_hanging_indent_shape(self):
         header_xml, _ = _read_template_files()
-        # The screenshot's HwpUnitChar intent value of -4050 corresponds to
-        # the dialog showing 40.5 pt 내어쓰기. Multiple paraPrs share the
-        # justify+165%+0margins shape (41, 42, 43, 44) — only paraPr 43 has
-        # intent=-4050.
-        matches = []
-        for pid in sorted(_all_paraPr_ids(header_xml), key=int):
-            p = _parse_paraPr(header_xml, pid)
-            if not p:
-                continue
-            if (p['align'] == 'JUSTIFY'
-                and p['ls_type'] == 'PERCENT'
-                and p['ls_value'] == '165'
-                and p['default_left'] == 0
-                and p['default_right'] == 0
-                and p['default_prev'] == 0
-                and p['default_next'] == 0
-                and p['hwpunitchar_intent'] == -4050
-                and p['breakNonLatinWord'] == 'KEEP_WORD'):
-                matches.append(pid)
-        self.assertEqual(matches, ['43'],
-            "Screenshot dialog state should uniquely identify paraPr 43; "
-            f"got: {matches}")
+        sm = json.loads(CACHE_PATH.read_text())['style_map']
+        dash_pp = sm['dash'][1]
+        p = _parse_paraPr(header_xml, dash_pp)
+        self.assertIsNotNone(p, f"dash paraPr {dash_pp} not found in header")
+        self.assertEqual(p['align'], 'JUSTIFY', "dash should be JUSTIFY-aligned")
+        self.assertEqual(p['ls_type'], 'PERCENT')
+        self.assertIsNotNone(p['hwpunitchar_intent'], "dash must define 내어쓰기")
+        self.assertLess(p['hwpunitchar_intent'], 0,
+                        "dash must use a hanging indent (intent < 0)")
+        self.assertEqual(p['default_left'], 0)
+        self.assertEqual(p['default_right'], 0)
+        self.assertEqual(p['default_prev'], 0)
+        self.assertEqual(p['default_next'], 0)
+        self.assertEqual(p['breakNonLatinWord'], 'KEEP_WORD')
 
 
 class TestTemplateFrequencyAlignment(unittest.TestCase):
@@ -151,29 +147,29 @@ class TestTemplateFrequencyAlignment(unittest.TestCase):
             paragraphs, attrs, para_cat, gh.DEFAULT_LINE_SPACING_BAND)
         return buckets
 
-    def test_dash_most_common_paraPr_is_43(self):
+    def test_dash_most_common_paraPr_is_260(self):
         buckets = self._bucket_from_template()
         counts = Counter((pp, cp) for pp, cp, _, _ in buckets["dash"])
         self.assertTrue(counts, "dash bucket should be non-empty")
         top_pair, _n = counts.most_common(1)[0]
-        self.assertEqual(top_pair[0], "43",
-            f"most common dash paraPr should be 43; got {top_pair}")
+        self.assertEqual(top_pair[0], "260",
+            f"most common dash paraPr should be 260; got {top_pair}")
 
-    def test_bullet_most_common_paraPr_is_41(self):
+    def test_bullet_most_common_paraPr_is_87(self):
         buckets = self._bucket_from_template()
         counts = Counter((pp, cp) for pp, cp, _, _ in buckets["bullet"])
         self.assertTrue(counts, "bullet bucket should be non-empty")
         top_pair, _n = counts.most_common(1)[0]
-        self.assertEqual(top_pair[0], "41",
-            f"most common bullet paraPr should be 41; got {top_pair}")
+        self.assertEqual(top_pair[0], "87",
+            f"most common bullet paraPr should be 87; got {top_pair}")
 
-    def test_heading_most_common_paraPr_is_40(self):
+    def test_heading_most_common_paraPr_is_210(self):
         buckets = self._bucket_from_template()
         counts = Counter((pp, cp) for pp, cp, _, _ in buckets["heading"])
         self.assertTrue(counts, "heading bucket should be non-empty")
         top_pair, _n = counts.most_common(1)[0]
-        self.assertEqual(top_pair[0], "40",
-            f"most common heading paraPr should be 40; got {top_pair}")
+        self.assertEqual(top_pair[0], "210",
+            f"most common heading paraPr should be 210; got {top_pair}")
 
 
 class TestMarkerParaPrProperties(unittest.TestCase):
@@ -182,10 +178,10 @@ class TestMarkerParaPrProperties(unittest.TestCase):
     """
 
     EXPECTED = {
-        "heading_marker": ("LEFT",    "165", -7160, -3580),
-        "heading_text":   ("LEFT",    "165", -7160, -3580),
-        "bullet":         ("JUSTIFY", "165", -6480, -3240),
-        "dash":           ("JUSTIFY", "165", -8100, -4050),
+        "heading_marker": ("LEFT",    "180", -7160, -3580),
+        "heading_text":   ("LEFT",    "180", -7160, -3580),
+        "bullet":         ("JUSTIFY", "160", -6086, -3043),
+        "dash":           ("JUSTIFY", "150", -6090, -3045),
     }
 
     def test_paraPr_properties(self):
@@ -298,25 +294,25 @@ class TestGeneratedDocumentParaPrPerMarker(unittest.TestCase):
 
     def test_each_marker_resolved_paraPr_properties(self):
         section_xml, header_xml = self._generate()
-        # heading (□): LEFT, 165%, hanging indent -3580 HwpUnitChar
+        # heading (□): LEFT, 180%, hanging indent -3580 HwpUnitChar
         p = self._paragraph_paraPr_props(section_xml, header_xml, "테스트 헤딩")
         self.assertEqual(p['align'], 'LEFT')
-        self.assertEqual(p['ls_value'], '165')
+        self.assertEqual(p['ls_value'], '180')
         self.assertEqual(p['hwpunitchar_intent'], -3580)
-        # bullet (ㅇ): JUSTIFY, 165%, hanging indent -3240
+        # bullet (ㅇ): JUSTIFY, 160%, hanging indent -3043
         p = self._paragraph_paraPr_props(section_xml, header_xml, "테스트 불릿")
         self.assertEqual(p['align'], 'JUSTIFY')
-        self.assertEqual(p['ls_value'], '165')
-        self.assertEqual(p['hwpunitchar_intent'], -3240)
-        # dash (-): JUSTIFY, 165%, hanging indent -4050 (screenshot value)
+        self.assertEqual(p['ls_value'], '160')
+        self.assertEqual(p['hwpunitchar_intent'], -3043)
+        # dash (-): JUSTIFY, 150%, hanging indent -3045
         p = self._paragraph_paraPr_props(section_xml, header_xml, "테스트 대시")
         self.assertEqual(p['align'], 'JUSTIFY')
-        self.assertEqual(p['ls_value'], '165')
-        self.assertEqual(p['hwpunitchar_intent'], -4050)
-        # star (*): LEFT, 155% (the only star paraPr in the template)
+        self.assertEqual(p['ls_value'], '150')
+        self.assertEqual(p['hwpunitchar_intent'], -3045)
+        # star (*): JUSTIFY, 145% (the dominant star paraPr in the template)
         p = self._paragraph_paraPr_props(section_xml, header_xml, "테스트 스타")
-        self.assertEqual(p['align'], 'LEFT')
-        self.assertEqual(p['ls_value'], '155')
+        self.assertEqual(p['align'], 'JUSTIFY')
+        self.assertEqual(p['ls_value'], '145')
 
     def test_line_spacing_override_switches_paraPrs(self):
         # --line-spacing 160 should pick a 160% LS paraPr for dash.

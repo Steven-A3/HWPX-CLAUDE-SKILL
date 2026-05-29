@@ -1,58 +1,45 @@
 {
-    "title": "2026년 1분기 업무 추진현황 보고",
-    "date": "26.02.14.",
-    "department": "전략기획팀",
+    "title": "(재)이노베이션아카데미 Codyssey 활용 사업 추진 계획(안)",
+    "date": "24. 6. 11.(화)",
+    "department": "이노베이션아카데미",
     "include_cover": false,
     "sections": [
         {
             "type": "body",
-            "title_bar": "업무 추진현황 보고",
+            "title_bar": "(재)이노베이션아카데미 Codyssey 활용 사업 추진 계획(안)",
             "content": [
-                {"type": "heading", "text": "주요 추진 실적"},
-                {"type": "bullet", "text": "AI 기반 문서 자동화 시스템 개발 착수"},
-                {"type": "dash", "text": "HWPX 포맷 역공학 분석 완료"},
-                {"type": "dash", "text": "자동 문서 생성 스킬 개발 완료"},
-                {"type": "star", "text": "한컴오피스 호환성 검증 완료"},
-                {"type": "heading", "text": "세부 추진 내용"},
-                {"type": "bullet", "text": "한글(HWPX) 문서 자동 생성 시스템 구축"},
-                {"type": "dash", "text": "이노베이션아카데미 표준보고서 양식 기반 템플릿 엔진 개발"},
-                {"type": "dash", "text": "서식이 포함된 정부 보고서 양식 자동 생성 기능"},
-                {"type": "table", "caption": "분기별 추진 실적",
-                 "headers": ["구분", "목표", "실적", "달성률"],
+                {"type": "heading", "text": "추진 배경"},
+                {"type": "bullet", "text": "(사업 준비) 2단계 사업 추진을 위한 \"예타 대상사업 심의\"에 대응, 본 사업 확정 시 효율적인 추진을 위한 역량 집결 및 동력 확보"},
+                {"type": "bullet", "text": "(사업 보완) 교육생 미선발에 따른 자체 주력사업 부재를 \"코디세이\" 개발·테스트·유지보수·고도화를 통한 SW인재양성 사업 발굴 기회로 전환"},
+                {"type": "star", "text": "'24년 교육생 미 선발, '25년 교육생 선발 불확실(사업비 편입 여부에 따라 확정)"},
+                {"type": "table", "caption": "'24년 코디세이 시범사업 추진 현황",
+                 "headers": ["연도", "구분", "기관명", "인원"],
                  "rows": [
-                     ["1월", "프로젝트 기획", "완료", "100%"],
-                     ["2월", "개발 및 테스트", "진행중", "80%"],
-                     ["3월", "배포 및 안정화", "예정", "-"]
-                 ]
-                },
-                {"type": "heading", "text": "향후 계획"},
-                {"type": "bullet", "text": "2분기 고도화 계획 수립"},
-                {"type": "dash", "text": "다양한 보고서 양식 템플릿 추가"},
-                {"type": "dash", "text": "표, 차트, 이미지 삽입 기능 확장"},
-                {"type": "note", "text": "편집용지 : 좌·우(20), 위(10)·아래(15), 머리말(15)·꼬리말(10), 줄간격(160%)"}
+                     ["2023년", "SW중심대학", "건국대", "50명"],
+                     ["2023년", "지자체", "성남시청소년재단", "50명"],
+                     ["2024년", "SW중심대학", "호서대", "30명"]
+                 ]},
+                {"type": "heading", "text": "「2단계 사업 추진 준비단」 운영(안)"},
+                {"type": "bullet", "text": "(목적) '25년 사업 추진을 위한 필수예산 부족분 확보, '26년 2단계 사업의 성공적인 추진을 위한 내실화 준비"},
+                {"type": "dash", "text": "사업 확장: 단일 사업(42서울)에서 코디세이를 활용한 사업 연계 기회 조사"},
+                {"type": "dash", "text": "구체화: 단기, 중·장기 계획 수립, 단계별 로드맵 작성"}
             ]
         },
         {
             "type": "appendix",
-            "title_bar": "참고1",
-            "appendix_title": "HWPX 포맷 기술 분석 결과",
+            "title_bar": "붙임",
+            "appendix_title": "사업 안건별 현황 조사",
             "content": [
-                {"type": "heading", "text": "HWPX 파일 구조"},
-                {"type": "bullet", "text": "HWPX는 ZIP+XML 기반의 문서 포맷"},
-                {"type": "dash", "text": "OWPML (KS X 6101) 표준 기반"},
-                {"type": "dash", "text": "mimetype, META-INF, Contents, BinData 디렉터리로 구성"},
-                {"type": "heading", "text": "핵심 발견 사항"},
-                {"type": "bullet", "text": "header.xml에 모든 스타일 정의 포함"},
-                {"type": "dash", "text": "fontfaces, charProperties, paraProperties, borderFills 등"},
-                {"type": "table", "caption": "주요 스타일 매핑",
-                 "headers": ["용도", "글꼴", "크기"],
+                {"type": "heading", "text": "SW중심대학"},
+                {"type": "bullet", "text": "전국 58개 SW중심대학 중 Codyssey 활용 수요가 있는 대학 조사·검토, 교육 플랫폼 및 콘텐츠 지원 등 연계 사업 진행"},
+                {"type": "dash", "text": "SW중심대학 협의회 및 과기정통부, 관련 기관과의 합동 논의를 통해 선정대학 전체에 Codyssey 활용 교육 도입 가능성 검토"},
+                {"type": "table", "caption": "연도별 선정내역",
+                 "headers": ["연도", "선정 대학"],
                  "rows": [
-                     ["제목", "HY헤드라인M", "20pt"],
-                     ["중제목", "HY헤드라인M", "15pt"],
-                     ["본문", "휴먼명조", "15pt"],
-                     ["표", "맑은고딕", "12pt"]
-                 ]
-                }
+                     ["'22년(9)", "국민대, 숙명여대, 아주대, 인하대, KAIST, 한밭대, 전북대 등"],
+                     ["'23년(13)", "경희대, 고려대, 동국대, 연세대, 영남대, 한동대 등"],
+                     ["'24년(17)", "건양대, 공주대, 단국대, 부경대, 서강대, 세종대 등"]
+                 ]}
             ]
         }
     ]

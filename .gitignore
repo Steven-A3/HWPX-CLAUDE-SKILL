@@ -24,3 +24,4 @@ Thumbs.db
 # Temp
 tmp/
 temp/
+.tokensave

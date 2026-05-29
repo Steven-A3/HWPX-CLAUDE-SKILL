@@ -496,6 +496,54 @@ def _extract_paragraph_first_text(para_xml):
     return ''.join(texts)
 
 
+def _count_body_headings(section_xml):
+    """Count top-level ``□`` heading paragraphs by marker text.
+
+    More robust than counting ``styleIDRef="15"``: real templates (e.g. the
+    MS_YOON 이노베이션아카데미 template) use other style IDs (14/54/…) for the
+    ``□`` headings, so a style-ID count would report zero and mis-classify the
+    body section as a cover page. Marker text (``□`` at the paragraph start) is
+    stable across templates — see ``_MARKER_PATTERNS``.
+    """
+    try:
+        paras, _ = _extract_all_top_level_paragraphs(section_xml)
+    except Exception:
+        return 0
+    count = 0
+    for p in paras:
+        if _MARKER_PATTERNS["heading"].match(_extract_paragraph_first_text(p)):
+            count += 1
+    return count
+
+
+_APPENDIX_TAB_RE = re.compile(r'^\s*(?:붙임|참고)')
+
+
+def _find_appendix_bar_para_idx(paragraphs):
+    """Return the index of the paragraph holding the 붙임/참고 appendix bar.
+
+    The appendix bar is a 1x3 table whose col-0 cell text starts with ``붙임``
+    or ``참고``. This is more reliable than "first colPr paragraph" because in
+    single-section templates the first colPr paragraph is the 3x1 *main title
+    bar*, not the appendix bar. Returns ``None`` if no such bar is found.
+    """
+    for i, p in enumerate(paragraphs):
+        tbl_m = (re.search(r'<hp:tbl\b[^>]*colCnt="3"[^>]*rowCnt="1"[^>]*>.*?</hp:tbl>',
+                           p, re.DOTALL)
+                 or re.search(r'<hp:tbl\b[^>]*rowCnt="1"[^>]*colCnt="3"[^>]*>.*?</hp:tbl>',
+                              p, re.DOTALL))
+        if not tbl_m:
+            continue
+        for tc in re.finditer(r'<hp:tc\b[^>]*>(.*?)</hp:tc>', tbl_m.group(0), re.DOTALL):
+            body = tc.group(1)
+            if re.search(r'<hp:cellAddr colAddr="0"', body):
+                col0 = ''.join(re.findall(r'<hp:t>([^<]*)</hp:t>', body))
+                if _APPENDIX_TAB_RE.match(col0):
+                    return i
+                break  # only inspect col-0 of this table
+    return None
+
+
 def _classify_paragraphs_by_marker(paragraphs, para_attrs_list, para_catalog,
                                     line_spacing_band):
     """Bucketize body paragraphs by leading marker character.
@@ -553,11 +601,15 @@ def _most_common_signature(bucket):
 def _detect_template_sections(template_dir):
     """Detect which section files contain body and appendix content.
 
-    Uses styleIDRef="15" count as the primary discriminator:
-      - Body section: has the most styleIDRef="15" paragraphs (□ headings)
-      - Appendix section: has colPr + 1x3 table (appendix bar), not the body
+    Discriminators:
+      - Body section: most ``□`` heading paragraphs (marker-based via
+        ``_count_body_headings``; legacy ``styleIDRef="15"`` count as fallback)
+      - Appendix section: colPr + 1x3 table (appendix bar), not the body.
+        For single-section templates the body section doubles as the appendix
+        skeleton source.
 
-    Returns (body_path, appendix_path). Either may be None if not found.
+    Returns (body_path, appendix_path). body_path may be None if not found;
+    appendix_path falls back to body_path for single-section templates.
     """
     template_dir = Path(template_dir)
     section_paths = sorted(template_dir.glob("Contents/section*.xml"),
@@ -570,7 +622,11 @@ def _detect_template_sections(template_dir):
             text = path.read_text(encoding='utf-8')
         except (UnicodeDecodeError, OSError):
             continue
-        heading_count = len(re.findall(r'styleIDRef="15"', text))
+        # Prefer marker-based heading detection (□); fall back to the legacy
+        # styleIDRef="15" count for older templates that used that style.
+        heading_count = _count_body_headings(text)
+        if heading_count == 0:
+            heading_count = len(re.findall(r'styleIDRef="15"', text))
         has_colpr = '<hp:colPr' in text
         has_appendix_bar = bool(re.search(r'colCnt="3".*?rowCnt="1"', text, re.DOTALL)
                                 or re.search(r'rowCnt="1".*?colCnt="3"', text, re.DOTALL))
@@ -603,6 +659,11 @@ def _detect_template_sections(template_dir):
         fallback = template_dir / "Contents" / "section2.xml"
         if fallback.exists():
             appendix_path = fallback
+    # Single-section templates (e.g. MS_YOON: body + 붙임 + 참고 all in one
+    # section) have no distinct appendix section — the 붙임/참고 bars live in
+    # the body section. Use the body section as the appendix skeleton source.
+    if appendix_path is None and body_path is not None:
+        appendix_path = body_path
 
     return body_path, appendix_path
 
@@ -905,22 +966,25 @@ def build_style_map_from_template(template_dir, line_spacing_band=DEFAULT_LINE_S
                 s2_paras, _ = _extract_all_top_level_paragraphs(s2_xml)
                 s2_attrs = [_extract_para_attrs(p) for p in s2_paras]
 
-                # Find appendix first_para (with colPr)
-                app_first_idx = None
-                for i, a in enumerate(s2_attrs):
-                    if a['has_colpr']:
-                        app_first_idx = i
-                        break
+                # Find the appendix-bar paragraph (1x3 붙임/참고 bar). Prefer the
+                # marker-based locator; fall back to the first colPr paragraph
+                # for legacy templates where the bar IS the first colPr para.
+                bar_idx = _find_appendix_bar_para_idx(s2_paras)
+                if bar_idx is None:
+                    for i, a in enumerate(s2_attrs):
+                        if a['has_colpr']:
+                            bar_idx = i
+                            break
 
-                if app_first_idx is not None:
-                    a = s2_attrs[app_first_idx]
+                if bar_idx is not None:
+                    a = s2_attrs[bar_idx]
                     app_cp = a['charPrIDRefs'][-1] if a['charPrIDRefs'] else '0'
                     sm['appendix_first'] = _make_style_tuple(
                         app_cp, a['paraPrIDRef'], a['vertsize'],
                         a['textheight'], a['baseline'], a['spacing'])
 
                     # Extract appendix bar table cells (1-row 3-col)
-                    cells = _extract_table_cells(s2_paras[app_first_idx])
+                    cells = _extract_table_cells(s2_paras[bar_idx])
                     for cell in cells:
                         if cell['colAddr'] == 0:
                             sm['bf_appendix_tab'] = cell['bf']
@@ -968,8 +1032,8 @@ def build_style_map_from_template(template_dir, line_spacing_band=DEFAULT_LINE_S
                 # If the next paragraph contains a table, its lineseg metrics will
                 # reflect the table wrapper (e.g. vertsize=65974) — skip it and
                 # fall back to the body section's spacer_small (same visual role).
-                if app_first_idx is not None and app_first_idx + 1 < len(s2_attrs):
-                    a = s2_attrs[app_first_idx + 1]
+                if bar_idx is not None and bar_idx + 1 < len(s2_attrs):
+                    a = s2_attrs[bar_idx + 1]
                     if not a['has_tbl'] and not a['has_text']:
                         sp_cp = a['charPrIDRefs'][0] if a['charPrIDRefs'] else '0'
                         sm['appendix_spacer'] = _make_style_tuple(
@@ -1243,14 +1307,23 @@ def inject_appendix_labels(p0_xml, tab_label, title_text):
                 injected = True
 
         elif col == 2 and title_text:
-            # Title: replace <hp:t> content (first gets space, second gets title)
+            # Title injection. Real templates (old + MS_YOON) store the title
+            # as a SINGLE combined <hp:t> run ("<space><title>"); some have two
+            # runs (space-run + title-run). Handle both so the title is never
+            # dropped (the previous code assumed two runs and wrote a bare
+            # space into single-run cells, losing the title entirely).
             cell_full = tc_m.group(0)
+            t_total = len(re.findall(r'<hp:t>[^<]*</hp:t>', cell_full))
             replaced_count = [0]
 
             def replacer(match):
                 replaced_count[0] += 1
+                if t_total == 1:
+                    # Single combined run carries the leading space + title.
+                    return f'<hp:t> {xml_escape(title_text)}</hp:t>'
+                # Multi-run: run 1 = leading space, run 2 = title, rest empty.
                 if replaced_count[0] == 1:
-                    return '<hp:t> </hp:t>'  # leading space
+                    return '<hp:t> </hp:t>'
                 elif replaced_count[0] == 2:
                     return f'<hp:t>{xml_escape(title_text)}</hp:t>'
                 return '<hp:t></hp:t>'
@@ -1884,6 +1957,13 @@ def generate_appendix_section_xml(section_config, sm, template_dir=None, outline
     appendix_title = section_config.get("appendix_title", "")
     content_items = section_config.get("content", [])
 
+    # An attachment/appendix bar (붙임/참고) without a title renders an empty
+    # title cell. Fail loudly so the title is never accidentally omitted.
+    if not (appendix_title and appendix_title.strip()):
+        raise ValueError(
+            f"appendix section '{tab_label}' is missing 'appendix_title' — "
+            f"the 붙임/참고 bar title must be filled")
+
     # --- Template path: use skeleton from appendix section ---
     # Detects appendix section by colPr + 1x3 table (appendix bar).
     # Uses structural markers (colPr) instead of position. (V3 fix)
@@ -2357,10 +2437,15 @@ def generate_hwpx(config, output_path, template_path=None,
         if include_cover:
             cover_src = tmpdir / "template" / "Contents" / "section0.xml"
             if cover_src.exists():
-                # Check if section0 is a cover-only section (no body headings)
-                # Body sections have styleIDRef="15" (□ headings); cover sections don't.
+                # Check if section0 is a cover-only section (no body headings).
+                # Body sections have □ headings; cover sections don't. Count by
+                # marker (with legacy styleIDRef="15" fallback) so templates that
+                # don't use style 15 for headings (e.g. MS_YOON) aren't mistaken
+                # for cover pages and corrupted.
                 cover_check = cover_src.read_text(encoding="utf-8")
-                heading_count = len(re.findall(r'styleIDRef="15"', cover_check))
+                heading_count = _count_body_headings(cover_check)
+                if heading_count == 0:
+                    heading_count = len(re.findall(r'styleIDRef="15"', cover_check))
                 if heading_count == 0:
                     cover_xml = generate_cover_section_xml(cover_src, config, sm)
                     (contents_dir / "section0.xml").write_text(cover_xml, encoding="utf-8")

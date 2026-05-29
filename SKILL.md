@@ -9,6 +9,8 @@ description: "**HWPX Document Generator**: Create Korean government-style HWPX (
 
 HWPX is the modern XML-based format for Hancom Office (한글). It is a ZIP archive containing XML files following the OWPML (KS X 6101) standard. This skill generates properly formatted HWPX documents that open correctly in Hancom Office.
 
+The bundled template (`assets/template.hwpx`) is the **MS_YOON 이노베이션아카데미 standard report** — a real government-style report carrying the correct fonts (HY헤드라인M, 휴먼명조, 맑은 고딕 …), the main title bar, and the 붙임/참고 attachment bars. The canonical document shape is **one main body (본문) + one attachment (붙임)**; see `examples/sample_report.json`.
+
 ## Architecture: Template-Based Generation
 
 This skill uses a **template-based approach** for reliable HWPX generation:
@@ -93,31 +95,52 @@ Where `SKILL_DIR` is the directory containing this SKILL.md file, and `CONFIG_JS
     },
     {
       "type": "appendix",
-      "title_bar": "참고1",
-      "appendix_title": "부록 제목",
+      "title_bar": "붙임",
+      "appendix_title": "붙임 제목",
       "content": [...]
     }
   ]
 }
 ```
 
+**Appendix / attachment sections (붙임 · 참고):**
+
+- `title_bar` is the **tab label** in the bar's left cell — use `"붙임"` for an
+  attachment or `"참고1"`, `"참고2"`, … for numbered references.
+- `appendix_title` is the **bar title text** (the right cell). It is
+  **required** for `appendix` sections — generation raises `ValueError` if it is
+  missing or blank, so a 붙임/참고 bar can never ship with an empty title.
+- The title is injected whether the template's title cell uses a single combined
+  text run or a separate space-run + title-run.
+
 ### Content Types and Style Mapping
 
-| Type | Marker | Font | Size | Style IDs (charPr/paraPr) |
-|------|--------|------|------|---------------------------|
-| `heading` | □ | HY헤드라인M | 15pt | charPr=27+2, paraPr=28 |
-| `paragraph` | (none) | 휴먼명조 | 15pt | charPr=36, paraPr=19 |
-| `bullet` | ㅇ | 휴먼명조 | 15pt | charPr=36, paraPr=19 |
-| `dash` | - | 휴먼명조 | 15pt | charPr=36, paraPr=20 |
-| `star` | * | 맑은고딕 | 13pt | charPr=57, paraPr=21 |
-| `table` | (table) | 맑은고딕 | 12pt | charPr=28/33, paraPr=25/23 |
-| `title_bar` | (bar) | HY헤드라인M | 20pt | charPr=1/30, paraPr=15 |
-| `appendix_bar` | (bar) | HY헤드라인M | 16pt | charPr=8/3/31, paraPr=18/16 |
+| Type | Marker | Role |
+|------|--------|------|
+| `heading` | □ | Section heading (LEFT-aligned, large) |
+| `paragraph` | (none) | Plain body text |
+| `bullet` | ㅇ | First-level bullet (JUSTIFY, hanging indent) |
+| `dash` | - | Second-level item (JUSTIFY, hanging indent) |
+| `star` | * | Footnote/detail (smaller) |
+| `note` | ▷ | Post-table note |
+| `table` | (table) | Data table with header row + body rows |
+| `title_bar` | (bar) | Body section title bar (3×1) |
+| `appendix_bar` | (bar) | 붙임/참고 attachment bar (1×3: tab │ sep │ title) |
+
+The concrete fonts, sizes and `charPr`/`paraPr` IDs are **auto-discovered from the
+template** at generation time (the discovered map is cached in
+`assets/default_styles.json`, keyed by the template's hash). The skill matches the
+five marker glyphs (`□`/`ㅇ`/`-`/`*` and the post-table note) by text and binds
+each to the template's most-common paraPr for that marker — so changing the
+template's marker styles in Hancom propagates automatically and no IDs are
+hard-coded against a specific template.
 
 ### Section Types
 
-- **`body`**: Standard report body section with title bar and content
-- **`appendix`**: Appendix section with numbered tab (참고1, 참고2, etc.)
+- **`body`** (본문): Standard report body section with title bar and content.
+- **`appendix`** (붙임 · 참고): Attachment section with a tab-style bar. Set
+  `title_bar` to the tab label (`"붙임"`, `"참고1"`, …) and `appendix_title` to the
+  bar title (**required** — see above).
 
 ## HWPX File Structure Reference
 
