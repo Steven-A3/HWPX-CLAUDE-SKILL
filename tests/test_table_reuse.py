@@ -58,12 +58,20 @@ class TestRichCellExtractor(unittest.TestCase):
 
     def test_rich_cells_have_geometry(self):
         cells = G._extract_table_cells_rich(self.tbl)
-        self.assertTrue(cells)
-        c = cells[0]
-        for k in ("rowAddr", "colAddr", "bf", "charPr", "paraPr", "width", "valign", "margin"):
-            self.assertIn(k, c)
-        self.assertIsInstance(c["width"], int)
-        self.assertEqual(set(c["margin"]), {"left", "right", "top", "bottom"})
+        self.assertGreater(len(cells), 1)
+        for c in cells:
+            for k in ("rowAddr", "colAddr", "bf", "charPr", "paraPr",
+                      "width", "height", "valign", "margin", "spanned"):
+                self.assertIn(k, c)
+        # value correctness on the header row (catches silent regex defaults)
+        r0 = sorted((c for c in cells if c["rowAddr"] == 0), key=lambda x: x["colAddr"])
+        self.assertTrue(r0)
+        for c in r0:
+            self.assertGreater(c["width"], 0)          # real cellSz width
+            self.assertNotEqual(c["bf"], "1")          # real border fill, not default
+            self.assertNotEqual(c["charPr"], "0")      # real run charPr, not default
+            self.assertIn(c["valign"], ("CENTER", "TOP", "BOTTOM"))
+            self.assertEqual(set(c["margin"]), {"left", "right", "top", "bottom"})
 
 
 if __name__ == "__main__":
