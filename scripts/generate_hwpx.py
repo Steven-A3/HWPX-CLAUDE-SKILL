@@ -1725,6 +1725,34 @@ def _bullet_transition_spacer_xml(sm, vpt):
 # Content Item Generators (multi-line aware)
 # ============================================================================
 
+def _normalize_text_segments(text, item_index=None):
+    """Normalize an item's 'text' to a list of (text, bold) tuples.
+
+    A plain string -> [(string, False)]. A list of {'t': str, 'bold': bool}
+    objects -> one tuple per segment. Raises ValueError on malformed input,
+    naming the offending content item / segment.
+    """
+    if isinstance(text, str):
+        return [(text, False)]
+    if not isinstance(text, list):
+        raise ValueError(
+            f"content item {item_index}: 'text' must be a string or a list of "
+            f"segments, got {type(text).__name__}")
+    out = []
+    for j, seg in enumerate(text):
+        if not isinstance(seg, dict) or 't' not in seg or not isinstance(seg['t'], str):
+            raise ValueError(
+                f"content item {item_index}, segment {j}: each segment must be "
+                f"an object with a string 't'")
+        out.append((seg['t'], bool(seg.get('bold', False))))
+    return out
+
+
+def _segments_plain_text(segments):
+    """Concatenate segment text (the visible string), ignoring weight."""
+    return ''.join(t for t, _bold in segments)
+
+
 def generate_content_item(item, sm, vpt):
     """Generate XML for a single content item. Updates vpt (VertPosTracker)."""
     item_type = item.get("type", "paragraph")

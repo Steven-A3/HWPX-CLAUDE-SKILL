@@ -36,5 +36,36 @@ class TestBoldWidth(unittest.TestCase):
         self.assertGreaterEqual(bold, normal)
 
 
+class TestSegmentNormalizer(unittest.TestCase):
+    def test_string_becomes_single_normal_segment(self):
+        self.assertEqual(G._normalize_text_segments("hello"), [("hello", False)])
+
+    def test_array_maps_to_tuples(self):
+        text = [{"t": "올해 "}, {"t": "목표", "bold": True}, {"t": "은"}]
+        self.assertEqual(G._normalize_text_segments(text),
+                         [("올해 ", False), ("목표", True), ("은", False)])
+
+    def test_bold_coerced_to_bool(self):
+        self.assertEqual(G._normalize_text_segments([{"t": "x", "bold": 1}]),
+                         [("x", True)])
+
+    def test_missing_t_raises_with_index(self):
+        with self.assertRaises(ValueError) as cm:
+            G._normalize_text_segments([{"bold": True}], item_index=3)
+        self.assertIn("3", str(cm.exception))
+
+    def test_non_string_t_raises(self):
+        with self.assertRaises(ValueError):
+            G._normalize_text_segments([{"t": 5}])
+
+    def test_non_list_non_string_raises(self):
+        with self.assertRaises(ValueError):
+            G._normalize_text_segments(42)
+
+    def test_plain_text_joins(self):
+        segs = [("올해 ", False), ("목표", True), ("은", False)]
+        self.assertEqual(G._segments_plain_text(segs), "올해 목표은")
+
+
 if __name__ == "__main__":
     unittest.main()
