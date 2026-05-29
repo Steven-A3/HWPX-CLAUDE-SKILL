@@ -67,5 +67,32 @@ class TestSegmentNormalizer(unittest.TestCase):
         self.assertEqual(G._segments_plain_text(segs), "올해 목표은")
 
 
+class TestFindBoldTwin(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        with zipfile.ZipFile(TEMPLATE) as zf:
+            zf.extractall(self.tmp.name)
+        hp = os.path.join(self.tmp.name, "Contents", "header.xml")
+        with open(hp, encoding="utf-8") as f:
+            self.header = f.read()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _has_bold(self, cid):
+        m = re.search(r'<hh:charPr id="%s".*?</hh:charPr>' % cid, self.header, re.DOTALL)
+        return m is not None and '<hh:bold' in m.group(0)
+
+    def test_exact_twin_found_and_is_true_twin(self):
+        # Base 38 (paragraph) has an exact bold twin in the bundled template.
+        twin = G._find_bold_twin(self.header, "38")
+        self.assertNotEqual(twin, "38")
+        self.assertTrue(self._has_bold(twin))
+
+    def test_no_twin_returns_base(self):
+        # A fabricated id with no twin returns the base unchanged.
+        self.assertEqual(G._find_bold_twin(self.header, "999999"), "999999")
+
+
 if __name__ == "__main__":
     unittest.main()

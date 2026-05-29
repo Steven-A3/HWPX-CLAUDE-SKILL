@@ -423,6 +423,39 @@ def _parse_header_catalogs(header_xml_path):
         return None, None
 
 
+def _charpr_canonical(charpr_xml):
+    """Canonical form of a <hh:charPr> for twin comparison: drop the id
+    attribute and any <hh:bold/> marker, collapse whitespace."""
+    s = re.sub(r'\s+id="\d+"', '', charpr_xml, count=1)
+    s = re.sub(r'<hh:bold\s*/>', '', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def _find_bold_twin(header_xml, base_id):
+    """Return the id of a bold charPr identical to base_id except for weight.
+
+    Exact match only: a candidate qualifies iff, after removing its id and any
+    <hh:bold/>, its serialized form equals the base's. Lowest matching id wins.
+    Returns str(base_id) when no exact twin exists (caller renders normal).
+    """
+    base_id = str(base_id)
+    chars = {}
+    for m in re.finditer(r'<hh:charPr id="(\d+)".*?</hh:charPr>', header_xml, re.DOTALL):
+        chars[m.group(1)] = m.group(0)
+    base = chars.get(base_id)
+    if base is None:
+        return base_id
+    base_canon = _charpr_canonical(base)
+    matches = []
+    for cid, xml in chars.items():
+        if cid == base_id or '<hh:bold' not in xml:
+            continue
+        if _charpr_canonical(xml) == base_canon:
+            matches.append(int(cid))
+    return str(min(matches)) if matches else base_id
+
+
 def _extract_all_top_level_paragraphs(section_xml):
     """Extract ALL top-level paragraphs from section XML.
 
