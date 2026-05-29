@@ -1864,7 +1864,7 @@ def appendix_bar_xml(tab_label, title_text, sm, table_id=1977606721):
 def _profile_cell_xml(col, row, width, height, text, cell, char_h, margin):
     """Emit one <hp:tc> reusing a profile cell's style, with regenerated text
     and a recomputed lineseg for the given width (Hancom does not recalc)."""
-    inner_hz = max(width - 1022, 0)
+    inner_hz = max(width - (margin["left"] + margin["right"]) - 2, 0)
     nlines = estimate_line_count(text, char_h, inner_hz) if text else 1
     baseline = int(char_h * 0.85)
     return (f'<hp:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" '

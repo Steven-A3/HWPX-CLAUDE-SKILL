@@ -166,6 +166,30 @@ class TestProfileDrivenTable(unittest.TestCase):
         xml, vs = G.data_table_xml(headers, rows, sm)   # must not raise
         self.assertIn("<hp:tbl", xml)
 
+    def test_table_height_equals_row_height_sum(self):
+        sm = self._sm()
+        ncols = int(sorted(sm["table_profiles"], key=int)[0])
+        headers = [f"H{i}" for i in range(ncols)]
+        rows = [[f"r{r}c{c}" for c in range(ncols)] for r in range(3)]
+        xml, _ = G.data_table_xml(headers, rows, sm)
+        # geometry must be self-consistent: table height == sum of per-row heights
+        # (Hancom trusts our geometry; it does not recalc).
+        heights = [int(h) for h in re.findall(r'<hp:cellSz width="\d+" height="(\d+)"', xml)]
+        per_row = heights[0::ncols]            # first cell of each row
+        tbl_h = int(re.search(r'<hp:sz width="\d+" widthRelTo="ABSOLUTE" height="(\d+)"', xml).group(1))
+        self.assertEqual(sum(per_row), tbl_h)
+
+    def test_single_body_row_uses_last_profile(self):
+        sm = self._sm()
+        ncols = int(sorted(sm["table_profiles"], key=int)[0])
+        prof = sm["table_profiles"][str(ncols)]
+        headers = [f"H{i}" for i in range(ncols)]
+        rows = [[f"c{c}" for c in range(ncols)]]   # R == 1
+        xml, _ = G.data_table_xml(headers, rows, sm)
+        trs = re.findall(r'<hp:tr>(.*?)</hp:tr>', xml, re.DOTALL)
+        body_fills = re.findall(r'borderFillIDRef="(\d+)"', trs[-1])
+        self.assertEqual(body_fills, [c["bf"] for c in prof["last"]])
+
 
 if __name__ == "__main__":
     unittest.main()
