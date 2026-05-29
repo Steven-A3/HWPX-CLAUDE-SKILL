@@ -201,5 +201,63 @@ class TestPrepScript(unittest.TestCase):
         return G.build_style_map_from_template(os.path.join(tmp.name, "t"))
 
 
+class TestEndToEnd(unittest.TestCase):
+    def test_generate_document_with_bold_keywords(self):
+        config = {
+            "include_cover": False,
+            "sections": [{
+                "type": "body",
+                "title_bar": "테스트 보고서",
+                "content": [
+                    {"type": "heading", "text": "추진 배경"},
+                    {"type": "paragraph",
+                     "text": [{"t": "올해 "}, {"t": "목표 달성률", "bold": True},
+                              {"t": "은 95%로 상승했다."}]},
+                    {"type": "dash",
+                     "text": [{"t": "핵심 "}, {"t": "지표", "bold": True}, {"t": " 개선"}]},
+                ],
+            }]
+        }
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        out = os.path.join(tmp.name, "out.hwpx")
+        G.generate_hwpx(config, out)
+
+        self.assertTrue(zipfile.is_zipfile(out))
+        with zipfile.ZipFile(out) as zf:
+            secs = sorted(n for n in zf.namelist() if re.search(r'section\d+\.xml$', n))
+            body = "".join(zf.read(n).decode("utf-8") for n in secs)
+            header = zf.read("Contents/header.xml").decode("utf-8")
+
+        # trim_unused_styles remaps charPr IDs sequentially after generation,
+        # so the IDs in default_styles.json (e.g. "71", "547") do not appear
+        # verbatim in the output.  Instead, verify the bold text is emitted in
+        # a <hp:run> whose charPrIDRef refers to a charPr that has <hh:bold/>.
+        def run_id_for_text(xml, text):
+            m = re.search(r'charPrIDRef="(\d+)"><hp:t>%s</hp:t>' % re.escape(text), xml)
+            return m.group(1) if m else None
+
+        def charpr_is_bold(hdr, cid):
+            m = re.search(r'<hh:charPr id="%s".*?</hh:charPr>' % re.escape(cid), hdr, re.DOTALL)
+            return m is not None and '<hh:bold' in m.group(0)
+
+        # paragraph bold run: "목표 달성률" must be in a run whose charPr is bold
+        para_bold_id = run_id_for_text(body, "목표 달성률")
+        self.assertIsNotNone(para_bold_id, "paragraph bold run not found in body XML")
+        self.assertTrue(charpr_is_bold(header, para_bold_id),
+                        "charPr %s used for '목표 달성률' is not bold" % para_bold_id)
+
+        # dash bold run: "지표" must be in a run whose charPr is bold
+        dash_bold_id = run_id_for_text(body, "지표")
+        self.assertIsNotNone(dash_bold_id, "dash bold run not found in body XML")
+        self.assertTrue(charpr_is_bold(header, dash_bold_id),
+                        "charPr %s used for '지표' is not bold" % dash_bold_id)
+
+        # paragraph and dash bold charPrs must be different twins (different base styles)
+        self.assertNotEqual(para_bold_id, dash_bold_id)
+
+        # heading rendered without a bold run
+        self.assertIn("추진 배경", body)
+
+
 if __name__ == "__main__":
     unittest.main()
