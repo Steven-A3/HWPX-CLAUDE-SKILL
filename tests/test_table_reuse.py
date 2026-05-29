@@ -45,5 +45,26 @@ class TestColumnWidths(unittest.TestCase):
         self.assertTrue(all(c >= G.MIN_COL_WIDTH for c in w))
 
 
+class TestRichCellExtractor(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        zipfile.ZipFile(TEMPLATE).extractall(self.tmp.name)
+        body, _ = G._detect_template_sections(self.tmp.name)
+        bx = open(body, encoding="utf-8").read()
+        paras, _ = G._extract_all_top_level_paragraphs(bx)
+        attrs = [G._extract_para_attrs(p) for p in paras]
+        self.tbl = next(paras[i] for i, a in enumerate(attrs)
+                        if a['has_tbl'] and not a['has_colpr'])
+
+    def test_rich_cells_have_geometry(self):
+        cells = G._extract_table_cells_rich(self.tbl)
+        self.assertTrue(cells)
+        c = cells[0]
+        for k in ("rowAddr", "colAddr", "bf", "charPr", "paraPr", "width", "valign", "margin"):
+            self.assertIn(k, c)
+        self.assertIsInstance(c["width"], int)
+        self.assertEqual(set(c["margin"]), {"left", "right", "top", "bottom"})
+
+
 if __name__ == "__main__":
     unittest.main()

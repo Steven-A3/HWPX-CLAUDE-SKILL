@@ -582,6 +582,40 @@ def _extract_table_cells(para_xml):
     return cells
 
 
+def _extract_table_cells_rich(para_xml):
+    """Like _extract_table_cells but also captures cellSz width, vertAlign,
+    cellMargin, and the primary charPr/paraPr. Returns list of dicts:
+    rowAddr, colAddr, bf, charPr, paraPr, width, height, valign, margin{l,r,t,b}.
+    Cells with rowSpan/colSpan > 1 set 'spanned' True.
+    """
+    cells = []
+    for tc_m in re.finditer(r'<hp:tc\b([^>]*)>(.*?)</hp:tc>', para_xml, re.DOTALL):
+        attrs, body = tc_m.group(1), tc_m.group(2)
+        addr = re.search(r'<hp:cellAddr\s+colAddr="(\d+)"\s+rowAddr="(\d+)"', body)
+        bf = re.search(r'borderFillIDRef="(\d+)"', attrs)
+        cp = re.search(r'charPrIDRef="(\d+)"', body)
+        pp = re.search(r'paraPrIDRef="(\d+)"', body)
+        sz = re.search(r'<hp:cellSz\s+width="(\d+)"\s+height="(\d+)"', body)
+        va = re.search(r'vertAlign="(\w+)"', body)
+        span = re.search(r'<hp:cellSpan\s+colSpan="(\d+)"\s+rowSpan="(\d+)"', body)
+        mg = re.search(r'<hp:cellMargin\s+left="(\d+)"\s+right="(\d+)"\s+top="(\d+)"\s+bottom="(\d+)"', body)
+        cells.append({
+            "rowAddr": int(addr.group(2)) if addr else -1,
+            "colAddr": int(addr.group(1)) if addr else -1,
+            "bf": bf.group(1) if bf else "1",
+            "charPr": cp.group(1) if cp else "0",
+            "paraPr": pp.group(1) if pp else "0",
+            "width": int(sz.group(1)) if sz else 0,
+            "height": int(sz.group(2)) if sz else 0,
+            "valign": va.group(1) if va else "CENTER",
+            "margin": ({"left": int(mg.group(1)), "right": int(mg.group(2)),
+                        "top": int(mg.group(3)), "bottom": int(mg.group(4))}
+                       if mg else {"left": 510, "right": 510, "top": 141, "bottom": 141}),
+            "spanned": bool(span and (int(span.group(1)) > 1 or int(span.group(2)) > 1)),
+        })
+    return cells
+
+
 def _make_style_tuple(char_pr_id, para_pr_id, vertsize, textheight, baseline, spacing):
     """Create a style map tuple entry."""
     return (str(char_pr_id), str(para_pr_id), int(vertsize), int(textheight),
