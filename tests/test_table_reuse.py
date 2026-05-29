@@ -74,5 +74,36 @@ class TestRichCellExtractor(unittest.TestCase):
             self.assertEqual(set(c["margin"]), {"left", "right", "top", "bottom"})
 
 
+class TestTableProfile(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        zipfile.ZipFile(TEMPLATE).extractall(self.tmp.name)
+        self.tdir = self.tmp.name
+        self.body, _ = G._detect_template_sections(self.tdir)
+        self.header_xml = open(os.path.join(self.tdir, "Contents", "header.xml"), encoding="utf-8").read()
+
+    def test_catalog_has_common_col_counts_and_shape(self):
+        bx = open(self.body, encoding="utf-8").read()
+        cat = G._build_table_profile_catalog(bx, self.header_xml)
+        self.assertTrue(cat)  # non-empty
+        prof = next(iter(cat.values()))
+        for k in ("total_width", "cell_margin", "header_h", "body_h", "row_h",
+                  "header", "first", "interior", "last"):
+            self.assertIn(k, prof)
+        ncols = len(prof["header"])
+        for role in ("header", "first", "interior", "last"):
+            self.assertEqual(len(prof[role]), ncols)
+            self.assertTrue(all("bf" in c and "charPr" in c for c in prof[role]))
+
+    def test_header_distinct_corner_fills(self):
+        bx = open(self.body, encoding="utf-8").read()
+        cat = G._build_table_profile_catalog(bx, self.header_xml)
+        multi = [p for p in cat.values() if len(p["header"]) >= 3]
+        self.assertTrue(multi)
+        p = multi[0]
+        bfs = [c["bf"] for c in p["header"]]
+        self.assertNotEqual(bfs[0], bfs[-1])  # left corner != right corner
+
+
 if __name__ == "__main__":
     unittest.main()

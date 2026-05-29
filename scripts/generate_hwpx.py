@@ -616,6 +616,86 @@ def _extract_table_cells_rich(para_xml):
     return cells
 
 
+def _char_height_of(header_xml, char_pr_id):
+    """Look up a charPr's height (HWPUNIT) from header.xml; default 1200."""
+    m = re.search(r'<hh:charPr id="%s"[^>]*height="(\d+)"' % char_pr_id, header_xml)
+    return int(m.group(1)) if m else 1200
+
+
+def _build_table_profile(table_para_xml, header_xml):
+    """Build a per-position style profile from ONE data-table paragraph.
+
+    Returns a profile dict or None if the table is unsuitable (has spanned
+    cells, no header row, < 2 body rows, or is not a full rectangular grid).
+    """
+    cells = _extract_table_cells_rich(table_para_xml)
+    if not cells or any(c["spanned"] for c in cells):
+        return None
+    rows = {}
+    for c in cells:
+        rows.setdefault(c["rowAddr"], {})[c["colAddr"]] = c
+    row_ids = sorted(r for r in rows if r >= 0)
+    if len(row_ids) < 3:                      # need header + >=2 body rows
+        return None
+    ncols = max(len(rows[r]) for r in row_ids)
+    for r in row_ids:                          # require a clean rectangular grid
+        if len(rows[r]) != ncols or any(j not in rows[r] for j in range(ncols)):
+            return None
+
+    def row_cells(r):
+        return [rows[r][j] for j in range(ncols)]
+
+    header_r, first_r, last_r = row_ids[0], row_ids[1], row_ids[-1]
+    interior_r = row_ids[2] if len(row_ids) >= 4 else row_ids[1]
+
+    # Require the header row to be a coherent header BAND, not column striping.
+    # A real header band has uniform interior fills (optionally distinct
+    # corners); an alternating pattern like 71/21/71/21/71 is decorative column
+    # shading on a data row, not a header, so such tables are unsuitable.
+    hdr_bfs = [rows[header_r][j]["bf"] for j in range(ncols)]
+    if ncols > 2 and len(set(hdr_bfs[1:-1])) != 1:
+        return None
+
+    def style_row(r):
+        return [{"bf": c["bf"], "charPr": c["charPr"], "paraPr": c["paraPr"],
+                 "valign": c["valign"]} for c in row_cells(r)]
+
+    hdr_cells = row_cells(header_r)
+    body_cells = row_cells(first_r)
+    total_width = sum(c["width"] for c in hdr_cells)
+    return {
+        "total_width": total_width,
+        "cell_margin": hdr_cells[0]["margin"],
+        "header_h": _char_height_of(header_xml, hdr_cells[0]["charPr"]),
+        "body_h": _char_height_of(header_xml, body_cells[0]["charPr"]),
+        "row_h": {"header": hdr_cells[0]["height"], "first": body_cells[0]["height"],
+                  "interior": row_cells(interior_r)[0]["height"],
+                  "last": row_cells(last_r)[0]["height"]},
+        "header": style_row(header_r),
+        "first": style_row(first_r),
+        "interior": style_row(interior_r),
+        "last": style_row(last_r),
+    }
+
+
+def _build_table_profile_catalog(body_section_xml, header_xml):
+    """Scan a body section for clean data tables and return
+    {ncols(str): profile} keeping the first clean table found per column count."""
+    catalog = {}
+    paras, _ = _extract_all_top_level_paragraphs(body_section_xml)
+    attrs = [_extract_para_attrs(p) for p in paras]
+    for i, a in enumerate(attrs):
+        if not (a['has_tbl'] and not a['has_colpr']):
+            continue
+        prof = _build_table_profile(paras[i], header_xml)
+        if prof is None:
+            continue
+        key = str(len(prof["header"]))
+        if key not in catalog:
+            catalog[key] = prof
+    return catalog
+
+
 def _make_style_tuple(char_pr_id, para_pr_id, vertsize, textheight, baseline, spacing):
     """Create a style map tuple entry."""
     return (str(char_pr_id), str(para_pr_id), int(vertsize), int(textheight),
