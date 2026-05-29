@@ -1806,12 +1806,59 @@ def _segments_plain_text(segments):
     return ''.join(t for t, _bold in segments)
 
 
-def generate_content_item(item, sm, vpt):
+# Marker body items that support bold segments: prefix + style/bold/end keys.
+_MARKER_ITEM_CFG = {
+    "paragraph": {"prefix": " ",        "style": "paragraph", "bold": "paragraph_bold", "end": "paragraph_end"},
+    "bullet":    {"prefix": " ㅇ ",      "style": "bullet",    "bold": "bullet_bold",    "end": "bullet_end"},
+    "dash":      {"prefix": "   - ",     "style": "dash",      "bold": "dash_bold",      "end": "dash_end"},
+    "star":      {"prefix": "     * ",   "style": "star",      "bold": "star_bold",      "end": "star_end"},
+    "note":      {"prefix": "▷ ",        "style": "note",      "bold": "note_bold",      "end": None},
+}
+
+
+def _build_segmented_runs(prefix, segments, base_cp, bold_cp, end_cp=None):
+    """Build run XML: a normal prefix run, one run per segment (base or bold
+    charPr), then an optional trailing end run."""
+    runs = run_xml(base_cp, prefix) if prefix else ""
+    for t, bold in segments:
+        runs += run_xml(bold_cp if bold else base_cp, t)
+    if end_cp is not None:
+        runs += run_xml(end_cp)
+    return runs
+
+
+def _render_marker_item(item, sm, vpt, cfg, item_index=None):
+    """Render paragraph/bullet/dash/star/note, supporting string or segment
+    array text. String text uses the unchanged single-run path."""
+    text = item.get("text", "")
+    s = sm[cfg["style"]]
+    end_cp = sm[cfg["end"]][0] if cfg["end"] else None
+    segments = _normalize_text_segments(text, item_index)
+    full_text = f"{cfg['prefix']}{_segments_plain_text(segments)}"
+    if isinstance(text, str):
+        nlines = estimate_line_count(full_text, s[2])
+        vp = vpt.next(s[2], s[5], nlines)
+        runs = run_xml(s[0], full_text) + (run_xml(end_cp) if end_cp is not None else "")
+    else:
+        nlines = _segmented_line_count([(cfg["prefix"], False)] + segments, s[2])
+        vp = vpt.next(s[2], s[5], nlines)
+        # Fall back to the base charPr if no bold key is present (e.g. a cache
+        # written before bold support) -> bold segments render at normal weight.
+        bold_cp = sm.get(cfg["bold"], s[0])
+        runs = _build_segmented_runs(cfg["prefix"], segments, s[0], bold_cp, end_cp)
+    return paragraph_xml(s[1], "0", runs,
+                         lineseg_xml(vertpos=vp, vertsize=s[2], textheight=s[3],
+                                     baseline=s[4], spacing=s[5],
+                                     num_lines=nlines, full_text=full_text))
+
+
+def generate_content_item(item, sm, vpt, item_index=None):
     """Generate XML for a single content item. Updates vpt (VertPosTracker)."""
     item_type = item.get("type", "paragraph")
     text = item.get("text", "")
 
     if item_type == "heading":
+        text = _segments_plain_text(_normalize_text_segments(text, item_index))
         s = sm["heading_marker"]
         full_text = f"□ {text} "
         nlines = estimate_line_count(full_text, s[2])
@@ -1825,49 +1872,8 @@ def generate_content_item(item, sm, vpt):
                                           baseline=s[4], spacing=s[5],
                                           num_lines=nlines, full_text=full_text))
 
-    elif item_type == "paragraph":
-        s = sm["paragraph"]
-        full_text = f" {text}"
-        nlines = estimate_line_count(full_text, s[2])
-        vp = vpt.next(s[2], s[5], nlines)
-        runs = run_xml(s[0], full_text) + run_xml(sm["paragraph_end"][0])
-        return paragraph_xml(s[1], "0", runs,
-                              lineseg_xml(vertpos=vp, vertsize=s[2], textheight=s[3],
-                                          baseline=s[4], spacing=s[5],
-                                          num_lines=nlines, full_text=full_text))
-
-    elif item_type == "bullet":
-        s = sm["bullet"]
-        full_text = f" ㅇ {text}"
-        nlines = estimate_line_count(full_text, s[2])
-        vp = vpt.next(s[2], s[5], nlines)
-        runs = run_xml(s[0], full_text) + run_xml(sm["bullet_end"][0])
-        return paragraph_xml(s[1], "0", runs,
-                              lineseg_xml(vertpos=vp, vertsize=s[2], textheight=s[3],
-                                          baseline=s[4], spacing=s[5],
-                                          num_lines=nlines, full_text=full_text))
-
-    elif item_type == "dash":
-        s = sm["dash"]
-        full_text = f"   - {text}"
-        nlines = estimate_line_count(full_text, s[2])
-        vp = vpt.next(s[2], s[5], nlines)
-        runs = run_xml(s[0], full_text) + run_xml(sm["dash_end"][0])
-        return paragraph_xml(s[1], "0", runs,
-                              lineseg_xml(vertpos=vp, vertsize=s[2], textheight=s[3],
-                                          baseline=s[4], spacing=s[5],
-                                          num_lines=nlines, full_text=full_text))
-
-    elif item_type == "star":
-        s = sm["star"]
-        full_text = f"     * {text}"
-        nlines = estimate_line_count(full_text, s[2])
-        vp = vpt.next(s[2], s[5], nlines)
-        runs = run_xml(s[0], full_text) + run_xml(sm["star_end"][0])
-        return paragraph_xml(s[1], "0", runs,
-                              lineseg_xml(vertpos=vp, vertsize=s[2], textheight=s[3],
-                                          baseline=s[4], spacing=s[5],
-                                          num_lines=nlines, full_text=full_text))
+    elif item_type in _MARKER_ITEM_CFG:
+        return _render_marker_item(item, sm, vpt, _MARKER_ITEM_CFG[item_type], item_index)
 
     elif item_type == "table":
         # Tables use their own internal lineseg; advance vpt with actual sizes
@@ -1884,17 +1890,6 @@ def generate_content_item(item, sm, vpt):
         tw = sm["table_wrapper"]
         vpt.next(wrapper_vs, tw[5])  # table wrapper para
         return tbl_xml
-
-    elif item_type == "note":
-        s = sm["note"]
-        full_text = f"▷ {text}"
-        nlines = estimate_line_count(full_text, s[2])
-        vp = vpt.next(s[2], s[5], nlines)
-        runs = run_xml(s[0], full_text)
-        return paragraph_xml(s[1], "0", runs,
-                              lineseg_xml(vertpos=vp, vertsize=s[2], textheight=s[3],
-                                          baseline=s[4], spacing=s[5],
-                                          num_lines=nlines, full_text=full_text))
 
     elif item_type == "empty":
         s = sm["spacer_small"]
@@ -1990,7 +1985,7 @@ def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref
 
                             content_xml = ""
                             prev_type = None
-                            for item in content_items:
+                            for idx, item in enumerate(content_items):
                                 curr_type = item.get("type", "paragraph")
                                 has_transition = _needs_bullet_transition_spacer(prev_type, curr_type)
                                 if has_transition:
@@ -2001,7 +1996,7 @@ def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref
                                     content_xml += paragraph_xml(ss[1], "0", run_xml(ss[0]),
                                         lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
                                                     baseline=ss[4], spacing=ss[5]))
-                                content_xml += generate_content_item(item, sm, vpt)
+                                content_xml += generate_content_item(item, sm, vpt, item_index=idx)
                                 prev_type = curr_type
 
                             return sec_header + p0 + p1 + p2 + content_xml + '</hs:sec>'
@@ -2047,7 +2042,7 @@ def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref
                                              baseline=sp[4], spacing=sp[5]))
 
     prev_type = None
-    for item in content_items:
+    for idx, item in enumerate(content_items):
         curr_type = item.get("type", "paragraph")
         has_transition = _needs_bullet_transition_spacer(prev_type, curr_type)
         if has_transition:
@@ -2058,7 +2053,7 @@ def generate_body_section_xml(section_config, sm, template_dir=None, outline_ref
             paragraphs += paragraph_xml(ss[1], "0", run_xml(ss[0]),
                                          lineseg_xml(vertpos=vp, vertsize=ss[2], textheight=ss[3],
                                                      baseline=ss[4], spacing=ss[5]))
-        paragraphs += generate_content_item(item, sm, vpt)
+        paragraphs += generate_content_item(item, sm, vpt, item_index=idx)
         prev_type = curr_type
 
     return f'<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hs:sec {NS_DECL}>{paragraphs}</hs:sec>'

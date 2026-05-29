@@ -116,5 +116,56 @@ class TestStyleMapBoldKeys(unittest.TestCase):
         self.assertNotEqual(sm["paragraph_bold"], sm["paragraph"][0])
 
 
+class TestSegmentedRunBuilder(unittest.TestCase):
+    def test_builds_prefix_and_bold_segment(self):
+        xml = G._build_segmented_runs(" ", [("올해 ", False), ("목표", True)],
+                                      base_cp="38", bold_cp="71", end_cp="33")
+        self.assertIn('<hp:run charPrIDRef="38"><hp:t> </hp:t></hp:run>', xml)
+        self.assertIn('charPrIDRef="71"><hp:t>목표</hp:t>', xml)
+        self.assertTrue(xml.rstrip().endswith('<hp:run charPrIDRef="33"/>'))
+
+    def test_no_end_run_when_none(self):
+        xml = G._build_segmented_runs("▷ ", [("주의", True)],
+                                      base_cp="38", bold_cp="71", end_cp=None)
+        self.assertNotIn('charPrIDRef="None"', xml)
+
+
+class TestContentItemBold(unittest.TestCase):
+    def _sm(self):
+        sm = dict(G.DEFAULT_STYLE_MAP)
+        sm["paragraph_bold"] = "71"  # force a distinct bold id for assertion
+        return sm
+
+    def test_string_paragraph_byte_identical(self):
+        sm = self._sm()
+        a = G.generate_content_item({"type": "paragraph", "text": "안녕"}, sm, G.VertPosTracker())
+        b = G.generate_content_item({"type": "paragraph", "text": "안녕"}, dict(G.DEFAULT_STYLE_MAP), G.VertPosTracker())
+        self.assertEqual(a, b)  # string path unchanged regardless of bold key
+
+    def test_array_paragraph_emits_bold_run(self):
+        sm = self._sm()
+        xml = G.generate_content_item(
+            {"type": "paragraph",
+             "text": [{"t": "올해 "}, {"t": "목표", "bold": True}, {"t": "달성"}]},
+            sm, G.VertPosTracker())
+        self.assertIn('charPrIDRef="71"><hp:t>목표</hp:t>', xml)
+        # plain text round-trips
+        self.assertEqual(G._extract_paragraph_first_text(xml), " 올해 목표달성")
+
+    def test_heading_flattens_array(self):
+        sm = self._sm()
+        xml = G.generate_content_item(
+            {"type": "heading", "text": [{"t": "제목", "bold": True}]},
+            sm, G.VertPosTracker())
+        self.assertNotIn('charPrIDRef="71"', xml)  # heading ignores bold
+        self.assertIn("제목", xml)
+
+    def test_malformed_segment_raises(self):
+        with self.assertRaises(ValueError):
+            G.generate_content_item(
+                {"type": "bullet", "text": [{"bold": True}]},
+                self._sm(), G.VertPosTracker(), item_index=2)
+
+
 if __name__ == "__main__":
     unittest.main()
