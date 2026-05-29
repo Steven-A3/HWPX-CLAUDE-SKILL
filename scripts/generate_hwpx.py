@@ -1861,26 +1861,121 @@ def appendix_bar_xml(tab_label, title_text, sm, table_id=1977606721):
 # Data Table Generator (with dynamic height)
 # ============================================================================
 
+def _profile_cell_xml(col, row, width, height, text, cell, char_h, margin):
+    """Emit one <hp:tc> reusing a profile cell's style, with regenerated text
+    and a recomputed lineseg for the given width (Hancom does not recalc)."""
+    inner_hz = max(width - 1022, 0)
+    nlines = estimate_line_count(text, char_h, inner_hz) if text else 1
+    baseline = int(char_h * 0.85)
+    return (f'<hp:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" '
+            f'borderFillIDRef="{cell["bf"]}">'
+            f'<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" '
+            f'vertAlign="{cell["valign"]}" linkListIDRef="0" linkListNextIDRef="0" '
+            f'textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">'
+            f'<hp:p id="2147483648" paraPrIDRef="{cell["paraPr"]}" styleIDRef="0" '
+            f'pageBreak="0" columnBreak="0" merged="0">'
+            f'{run_xml(cell["charPr"], text)}'
+            f'{lineseg_xml(vertsize=char_h, textheight=char_h, baseline=baseline, spacing=360, horzsize=inner_hz, num_lines=nlines, full_text=text)}'
+            f'</hp:p></hp:subList>'
+            f'<hp:cellAddr colAddr="{col}" rowAddr="{row}"/>'
+            f'<hp:cellSpan colSpan="1" rowSpan="1"/>'
+            f'<hp:cellSz width="{width}" height="{height}"/>'
+            f'<hp:cellMargin left="{margin["left"]}" right="{margin["right"]}" '
+            f'top="{margin["top"]}" bottom="{margin["bottom"]}"/>'
+            f'</hp:tc>')
+
+
+def _row_height(texts, widths, char_h, base_h, margin):
+    """Row height = max over cells of (wrapped lines) accommodated, >= base_h."""
+    max_lines = 1
+    for t, w in zip(texts, widths):
+        if t:
+            max_lines = max(max_lines, estimate_line_count(t, char_h, max(w - 1022, 0)))
+    computed = max_lines * char_h + (max_lines - 1) * 360 + margin["top"] + margin["bottom"]
+    return max(base_h, computed)
+
+
+def _data_table_from_profile(headers, rows, prof, sm, caption, table_id):
+    """Render a data table reusing a template profile. Returns (xml, wrapper_vs)."""
+    ncols = len(headers)
+    total_width = prof["total_width"]
+    margin = prof["cell_margin"]
+    widths = _compute_column_widths(headers, rows, max(prof["header_h"], prof["body_h"]),
+                                    total_width, h_margin=margin["left"] + margin["right"])
+    R = len(rows)
+
+    def body_role(i):
+        if R == 1:
+            return "last"
+        if i == 0:
+            return "first"
+        if i == R - 1:
+            return "last"
+        return "interior"
+
+    h_h = _row_height(headers, widths, prof["header_h"], prof["row_h"]["header"], margin)
+    header_cells = "".join(
+        _profile_cell_xml(j, 0, widths[j], h_h, str(headers[j]), prof["header"][j],
+                          prof["header_h"], margin)
+        for j in range(ncols))
+    total_height = h_h
+    body_rows = ""
+    for i, row in enumerate(rows):
+        role = body_role(i)
+        texts = [str(row[j]) if j < len(row) else "" for j in range(ncols)]
+        rh = _row_height(texts, widths, prof["body_h"], prof["row_h"][role], margin)
+        total_height += rh
+        cells = "".join(
+            _profile_cell_xml(j, i + 1, widths[j], rh, texts[j], prof[role][j],
+                              prof["body_h"], margin)
+            for j in range(ncols))
+        body_rows += f'<hp:tr>{cells}</hp:tr>'
+
+    paragraphs = ""
+    if caption:
+        tc = sm["table_caption"]
+        paragraphs += paragraph_xml(tc[1], "0", run_xml(tc[0], f"< {caption} >"),
+                                     lineseg_xml(vertsize=tc[2], textheight=tc[3], baseline=tc[4], spacing=tc[5]))
+    wrapper_vertsize = total_height + 566
+    tw = sm["table_wrapper"]
+    tbl = (f'<hp:tbl id="{table_id}" zOrder="0" numberingType="TABLE" '
+           f'textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" '
+           f'pageBreak="CELL" repeatHeader="1" rowCnt="{R + 1}" colCnt="{ncols}" '
+           f'cellSpacing="0" borderFillIDRef="{prof["interior"][0]["bf"]}" noAdjust="0">'
+           f'<hp:sz width="{total_width}" widthRelTo="ABSOLUTE" height="{total_height}" heightRelTo="ABSOLUTE" protect="0"/>'
+           f'<hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" '
+           f'holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" '
+           f'vertOffset="0" horzOffset="0"/>'
+           f'<hp:outMargin left="283" right="283" top="283" bottom="283"/>'
+           f'<hp:inMargin left="{margin["left"]}" right="{margin["right"]}" top="{margin["top"]}" bottom="{margin["bottom"]}"/>'
+           f'<hp:tr>{header_cells}</hp:tr>{body_rows}</hp:tbl>')
+    paragraphs += paragraph_xml(tw[1], "0",
+                                 f'<hp:run charPrIDRef="{tw[0]}">{tbl}<hp:t/></hp:run>',
+                                 lineseg_xml(vertsize=wrapper_vertsize, textheight=wrapper_vertsize,
+                                             baseline=int(wrapper_vertsize * 0.85), spacing=tw[5]))
+    return paragraphs, wrapper_vertsize
+
+
 def data_table_xml(headers, rows, sm, caption="", table_id=1974981391):
-    """Generate a data table with header row and body rows."""
+    """Generate a data table. Reuses a template style profile for the table's
+    column count when available; otherwise falls back to a generated table."""
     num_cols = len(headers)
+    prof = sm.get("table_profiles", {}).get(str(num_cols))
+    if prof:
+        return _data_table_from_profile(headers, rows, prof, sm, caption, table_id)
+
+    # ---- fallback: generated table (original behavior, content-aware widths) ----
     num_rows = len(rows) + 1
     total_width = 47622
-    col_width = total_width // num_cols
-    col_widths = [col_width] * num_cols
-    col_widths[-1] += total_width - col_width * num_cols
+    col_widths = _compute_column_widths(headers, rows, sm["table_body"][2], total_width)
     row_height = 2048
     total_height = row_height * num_rows
-
-    th = sm["table_header"]
-    tb = sm["table_body"]
-
+    th = sm["table_header"]; tb = sm["table_body"]
     header_cells = ""
     for i, (hdr, w) in enumerate(zip(headers, col_widths)):
         header_cells += table_cell_xml(i, 0, w, row_height, sm["bf_table_header"],
                                         th[1], th[0], hdr,
                                         vertsize=th[2], textheight=th[3], baseline=th[4], spacing=th[5])
-
     body_rows = ""
     for r_idx, row in enumerate(rows):
         cells = ""
@@ -1889,16 +1984,12 @@ def data_table_xml(headers, rows, sm, caption="", table_id=1974981391):
                                      tb[1], tb[0], str(cell_text),
                                      vertsize=tb[2], textheight=tb[3], baseline=tb[4], spacing=tb[5])
         body_rows += f'<hp:tr>{cells}</hp:tr>'
-
     paragraphs = ""
     if caption:
         tc = sm["table_caption"]
         paragraphs += paragraph_xml(tc[1], "0", run_xml(tc[0], f"< {caption} >"),
                                      lineseg_xml(vertsize=tc[2], textheight=tc[3], baseline=tc[4], spacing=tc[5]))
-
-    # Dynamic wrapper vertsize based on actual table height + margins
-    wrapper_vertsize = total_height + 566   # table height + top/bottom outMargin (283*2)
-
+    wrapper_vertsize = total_height + 566
     tw = sm["table_wrapper"]
     tbl = (f'<hp:tbl id="{table_id}" zOrder="0" numberingType="TABLE" '
            f'textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" '
@@ -1911,7 +2002,6 @@ def data_table_xml(headers, rows, sm, caption="", table_id=1974981391):
            f'<hp:outMargin left="283" right="283" top="283" bottom="283"/>'
            f'<hp:inMargin left="510" right="510" top="141" bottom="141"/>'
            f'<hp:tr>{header_cells}</hp:tr>{body_rows}</hp:tbl>')
-
     paragraphs += paragraph_xml(tw[1], "0",
                                  f'<hp:run charPrIDRef="{tw[0]}">{tbl}<hp:t/></hp:run>',
                                  lineseg_xml(vertsize=wrapper_vertsize, textheight=wrapper_vertsize,

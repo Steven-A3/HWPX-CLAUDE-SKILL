@@ -120,5 +120,52 @@ class TestStyleMapTableProfiles(unittest.TestCase):
             self.assertEqual(len(prof["header"]), int(ncols))
 
 
+class TestProfileDrivenTable(unittest.TestCase):
+    def _sm(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        zipfile.ZipFile(TEMPLATE).extractall(os.path.join(tmp.name, "t"))
+        return G.build_style_map_from_template(os.path.join(tmp.name, "t"))
+
+    def test_uses_profile_border_fills(self):
+        sm = self._sm()
+        ncols = int(sorted(sm["table_profiles"], key=int)[0])
+        prof = sm["table_profiles"][str(ncols)]
+        headers = [f"H{i}" for i in range(ncols)]
+        rows = [[f"r{r}c{c}" for c in range(ncols)] for r in range(3)]
+        xml, _ = G.data_table_xml(headers, rows, sm)
+        header_tr = re.search(r'<hp:tr>(.*?)</hp:tr>', xml, re.DOTALL).group(1)
+        hdr_cell_bfs = re.findall(r'<hp:tc\b[^>]*borderFillIDRef="(\d+)"', header_tr)
+        self.assertEqual(hdr_cell_bfs, [c["bf"] for c in prof["header"]])
+
+    def test_last_row_uses_last_profile_fill(self):
+        sm = self._sm()
+        ncols = int(sorted(sm["table_profiles"], key=int)[0])
+        prof = sm["table_profiles"][str(ncols)]
+        headers = [f"H{i}" for i in range(ncols)]
+        rows = [[f"r{r}c{c}" for c in range(ncols)] for r in range(4)]
+        xml, _ = G.data_table_xml(headers, rows, sm)
+        last_fill = prof["last"][0]["bf"]
+        self.assertIn(last_fill, xml)
+
+    def test_widths_sum_to_profile_total(self):
+        sm = self._sm()
+        ncols = int(sorted(sm["table_profiles"], key=int)[0])
+        prof = sm["table_profiles"][str(ncols)]
+        headers = [f"H{i}" for i in range(ncols)]
+        rows = [[f"r{r}c{c}" for c in range(ncols)] for r in range(2)]
+        xml, _ = G.data_table_xml(headers, rows, sm)
+        widths = [int(w) for w in re.findall(r'<hp:cellSz width="(\d+)"', xml)]
+        self.assertEqual(sum(widths[:ncols]), prof["total_width"])
+
+    def test_fallback_when_no_profile(self):
+        sm = self._sm()
+        present = {int(k) for k in sm["table_profiles"]}
+        ncols = next(c for c in range(2, 40) if c not in present)
+        headers = [f"H{i}" for i in range(ncols)]
+        rows = [[f"r{c}" for c in range(ncols)]]
+        xml, vs = G.data_table_xml(headers, rows, sm)   # must not raise
+        self.assertIn("<hp:tbl", xml)
+
+
 if __name__ == "__main__":
     unittest.main()
