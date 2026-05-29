@@ -1,8 +1,8 @@
-# Bold keyword runs in body content — Design
+# Bold keyword runs in body content — Design (rev. 2)
 
 **Date:** 2026-05-29
 **Branch:** feat/ms-yoon-template-and-appendix-title
-**Status:** Approved (design)
+**Status:** Approved (design), revised after adversarial self-review
 
 ## Problem
 
@@ -11,35 +11,56 @@ emphasizes selected keywords inside body sentences with **bold** weight. The
 generator currently emits each body item's text as a single run with one
 `charPrIDRef`, so there is no way for an author to mark a word or phrase as bold.
 The template's `header.xml` already contains bold character properties
-(100 charPrs carry `<hh:bold/>`); the feature should reuse those rather than
-invent new styling.
+(100 charPrs carry `<hh:bold/>`); the feature reuses those rather than invent new
+styling.
 
 ## Goal
 
-Let an author mark spans of body text as bold in the source JSON, and have the
-generator render those spans as separate bold runs whose styling is discovered
-from the template, while leaving layout math and all existing (string-text)
-output byte-identical.
+Let an author mark spans of body text as bold in the source JSON, render those
+spans as separate bold runs whose styling is **discovered from the template**,
+and keep layout geometry correct (Hancom does not recalculate lineseg — see
+memory `hancom_recalculates_lineseg`).
 
 ## Non-goals
 
-- Bold in `heading` items (headings already use a distinct emphasized style).
-- Bold in table cells (`table_cell_xml` is a separate code path; out of scope).
+- Bold in `heading` items, table cells, or anything beyond the five body types.
 - Italic, underline, color, or any emphasis other than bold.
-- Synthesizing new charPr definitions. Bold styling is discovered from the
-  template only.
+- **Synthesizing** new charPr definitions. Bold styling is discovered only.
+
+---
+
+## Revisions from rev. 1 (adversarial review findings)
+
+Three weaknesses were found in rev. 1 and are addressed below:
+
+1. **Layout was *not* invariant.** Rev. 1 claimed splitting a run leaves line
+   math unchanged "because the plain text is identical." False for proportional
+   (Latin/digit) glyphs: bold widens them, and the width model `_char_width`
+   ignored weight. See §"Layout / line-count math".
+2. **Discovery's loose fallback was unsafe.** Measured on the bundled template:
+   `paragraph`/`bullet`/`note` (base charPr 38) have an exact bold twin
+   (charPr 71), but `dash` (397) and `star` (273) have **none** — their bases
+   differ by `spacing="-14"` and a distinct `borderFillIDRef`. Rev. 1 would have
+   fallen back to the lowest-id bold charPr sharing only font+height, silently
+   rendering a different **color/spacing/border**. The loose fallback is removed.
+   See §"Bold-style discovery".
+3. **Other code paths were unaudited.** Confirmed during review: both body
+   render paths (`generate_body_section_xml` skeleton path and fully-generated
+   fallback) emit content via `generate_content_item`; `render_paragraph` /
+   `insert_paragraph_from_template` are **not** in the body path.
+   `_extract_paragraph_first_text` joins all `<hp:t>` nodes, so multi-run
+   paragraphs read back intact. No second renderer needs changing; regression
+   tests are added to lock this in. See §"Affected code" and §"Testing".
+
+---
 
 ## Authoring interface
 
 Every supported body item's `text` field accepts **either** form:
 
-1. **Plain string** (unchanged) — renders exactly as today, single run:
-   ```json
-   { "type": "paragraph", "text": "올해 목표 달성률은 95%로 상승했다." }
-   ```
-
-2. **Array of segments** — each segment is an object with a required string `t`
-   and an optional boolean `bold` (default `false`):
+1. **Plain string** (unchanged) — renders exactly as today, single run.
+2. **Array of segments** — each segment an object with required string `t` and
+   optional boolean `bold` (default `false`):
    ```json
    { "type": "paragraph",
      "text": [
@@ -49,110 +70,158 @@ Every supported body item's `text` field accepts **either** form:
      ] }
    ```
 
-A normalizer collapses both forms to a canonical list of `(text, bold)` tuples:
-- string `s` → `[(s, False)]`
-- array → `[(seg["t"], bool(seg.get("bold", False))) for seg in array]`
-
-The **flattened plain text** (concatenation of every segment's `t`) is what feeds
-`estimate_line_count` and the `full_text` argument to `lineseg_xml`. For the
-example above the flattened text is `"올해 목표 달성률은 95%로 상승했다."`, identical
-to the string form — so line-count estimation and `VertPosTracker` advancement
-are unchanged. This matters because Hancom Office does not recalculate lineseg
-(see memory `hancom_recalculates_lineseg`); the computed line geometry must stay
-accurate and must not drift when a run is split into segments.
+A normalizer collapses both forms to a canonical list of `(text, bold)` tuples
+(string `s` → `[(s, False)]`).
 
 ### Scope
 
-Segment arrays are honored for: `paragraph`, `bullet`, `dash`, `star`, `note`.
+Segment arrays are honored for `paragraph`, `bullet`, `dash`, `star`, `note`.
+`heading` flattens a segment array to plain text (bold ignored, no error). Table
+cells do not support segments.
 
-- `heading`: a segment array is **flattened to plain text** (bold ignored). No
-  error.
-- Table cells: unaffected; segment arrays are not supported there.
+---
+
+## Layout / line-count math (rev. 1 fix #1)
+
+Rev. 1 fed the flattened plain text to `estimate_line_count`, implicitly assuming
+bold does not change width. That holds for **Hangul/CJK** glyphs — they occupy a
+fixed em square and `_char_width` returns the full `char_height` regardless of
+weight, so bolding them does **not** change advance width or wrapping. Korean
+report bodies are overwhelmingly Hangul, so the common case is genuinely
+layout-safe, and this is now stated as a justified fact, not an assumption.
+
+It does **not** hold for proportional glyphs (Latin letters, digits, ASCII), for
+which `_char_width` returns a fraction of `char_height` and bold visibly widens
+the glyph. To account for this:
+
+- `_char_width(ch, char_height, bold=False)` gains an optional `bold` flag. For
+  Hangul/CJK/fullwidth/box-drawing/symbol glyphs it returns `char_height`
+  unchanged (weight-invariant). For proportional ASCII alpha/digit glyphs it
+  multiplies the existing width by a bold factor (`BOLD_WIDTH_FACTOR`, ~1.1).
+- The array path computes its line count with a new
+  `_segmented_line_count(segments, char_height, horzsize)` that accumulates
+  per-character widths using each segment's `bold` flag, instead of flattening
+  and calling `estimate_line_count`. The string path is unchanged and still calls
+  `estimate_line_count`.
+- The flattened plain text is still passed as `full_text` to `lineseg_xml` (so
+  the rendered text content and `<hp:t>` round-trip are correct); only the
+  **line count** is computed with weight awareness.
+
+This means a near-margin bold Latin phrase that pushes content onto an extra line
+is counted as an extra line, so the computed lineseg geometry matches what Hancom
+renders. Hangul-only bold continues to match the string-form line count exactly.
+
+---
 
 ## Run emission
 
-`generate_content_item` keeps two code paths per supported item type:
+`generate_content_item` keeps two paths per supported type:
 
-- **String text** → the existing single-run path is used verbatim:
-  `run_xml(base, full_text) + run_xml(end)`. Output is byte-identical to today.
+- **String text** → existing single-run path, byte-identical to today:
+  `run_xml(base, full_text) + run_xml(end)`.
 - **Array text** → multi-run path:
-  1. Emit the marker/indent **prefix** as a normal run with the item's base
-     charPr. Prefixes per type: `paragraph` `" "`, `bullet` `" ㅇ "`,
-     `dash` `"   - "`, `star` `"     * "`, `note` `"▷ "`.
-  2. Emit **one run per segment**: base charPr when `bold` is false, the
-     discovered **bold** charPr when `bold` is true. Text is XML-escaped by the
-     existing `run_xml`/`xml_escape`.
-  3. Emit the existing trailing `*_end` run unchanged (where the type has one).
+  1. Emit the marker/indent **prefix** as a normal run with the base charPr
+     (`paragraph` `" "`, `bullet` `" ㅇ "`, `dash` `"   - "`, `star` `"     * "`,
+     `note` `"▷ "`).
+  2. Emit **one run per segment**: base charPr if `bold` is false, the discovered
+     **bold** charPr if true. `run_xml`/`xml_escape` handle escaping.
+  3. Emit the existing trailing `*_end` run unchanged.
 
-Adjacent normal runs (prefix + leading normal segment) are acceptable HWPX and
-need not be merged.
+A shared helper builds the run XML from the canonical segment list, base charPr,
+bold charPr, and prefix, so all five types share one implementation.
 
-A shared helper builds the run XML from the canonical segment list, the base
-charPr id, the bold charPr id, and the prefix string, so all five item types use
-one implementation.
+---
 
-## Bold-style discovery
+## Bold-style discovery (rev. 1 fix #2 — exact twin only)
 
 `build_style_map_from_template` resolves a bold charPr id for each body base
-style and stores it in the style map as:
-`paragraph_bold`, `bullet_bold`, `dash_bold`, `star_bold`, `note_bold`.
+style and stores `paragraph_bold`, `bullet_bold`, `dash_bold`, `star_bold`,
+`note_bold` in the style map (persisted to `assets/default_styles.json`; cache
+regenerated since it is keyed by template hash).
 
-Discovery is performed by a new helper `_find_bold_twin(header_xml, base_id)`:
+`_find_bold_twin(header_xml, base_id)` returns an **exact twin only**:
 
-1. **Exact twin (preferred).** Take the base style's full `<hh:charPr>` element;
-   strip its `id` attribute and any `<hh:bold/>` child to form a normalized
-   signature. For each catalog charPr with `bold=True`, compute the same
-   normalized signature (id + `<hh:bold/>` removed). A candidate whose normalized
-   signature **exactly equals** the base's is an exact twin — identical font,
-   size, color, and spacing, differing only in weight. Lowest matching id wins
-   (deterministic).
-2. **Loose match.** If no exact twin exists, match any `bold=True` charPr with
-   the same `(face, height)` as the base (the data already in the char catalog).
-   Lowest matching id wins.
-3. **Base fallback.** If neither matches, use the base charPr id itself; bold
-   segments in that style render as normal weight. Emit a one-line warning naming
-   the style. No error, no synthesis.
+- Parse the base `<hh:charPr>` and every `bold=True` candidate. A candidate is a
+  twin iff, after removing the `id` attribute and the `<hh:bold/>` element, its
+  attribute set and child-element set are **identical** to the base's (order- and
+  whitespace-insensitive, compared structurally). This guarantees the bold run
+  matches the base in font, size, color, spacing, border, and all decorations —
+  differing only in weight.
+- **No loose fallback.** If no exact twin exists, return the **base id** (bold
+  segments in that style render at normal weight) and emit a prominent warning
+  naming the style and stating that bold will not apply. The loose font+height
+  match from rev. 1 is deliberately removed because it silently changes visible
+  attributes (the dash base differs by `spacing="-14"` and `borderFillIDRef`).
 
-The resolved bold ids are written into the style map and therefore persisted to
-`assets/default_styles.json`. Because the cache is keyed by template hash, the
-cache is regenerated as part of this change so the new keys are present.
+### Known limitation on the bundled template (documented, by design)
+
+| body style | base charPr | exact twin | bold applies? |
+|---|---|---|---|
+| paragraph / bullet / note | 38 | **71** | **yes** |
+| dash | 397 | none | no (renders normal, warns) |
+| star | 273 | none | no (renders normal, warns) |
+
+`dash`/`star` lack an exact twin because their base charPr carries a unique
+`spacing`/`borderFillIDRef`. Their bold segments render at normal weight with a
+warning. The remedy is to add a matching bold charPr to the template (e.g., apply
+bold once to a dash/star line in Hancom and re-export). Synthesizing the twin is
+intentionally out of scope (discovery-only, per the chosen approach). This
+limitation is documented in `SKILL.md` so authors are not surprised.
+
+---
 
 ## Validation
 
-- A segment array element that is not an object, or whose `t` is missing/not a
+- A segment array element that is not an object, or whose `t` is missing or not a
   string, raises `ValueError` identifying the offending item (by content index)
-  and segment.
-- `bold` that is present but not boolean → coerced via `bool()`; documented.
-- Empty-string and whitespace-only segments are permitted and pass through
-  unchanged.
+  and segment index.
+- `bold` present but non-boolean is coerced via `bool()` (documented).
+- Empty-string / whitespace-only segments are permitted and pass through.
+
+---
 
 ## Affected code
 
 - `scripts/generate_hwpx.py`
-  - `generate_content_item` — dual path for the five supported types.
-  - new run-builder helper for segmented text.
+  - `_char_width` — add optional `bold` flag (Hangul/CJK weight-invariant;
+    proportional glyphs widened by `BOLD_WIDTH_FACTOR`).
+  - new `_segmented_line_count` helper (weight-aware line count for arrays).
   - new segment normalizer + validation helper.
-  - `_find_bold_twin` helper.
+  - new run-builder helper for segmented text.
+  - new `_find_bold_twin` helper (exact-twin-only).
   - `build_style_map_from_template` — resolve and store the five `*_bold` keys.
-  - `DEFAULT_STYLE_MAP` — add the five `*_bold` keys (fallback values).
+  - `DEFAULT_STYLE_MAP` — add the five `*_bold` keys (fallback = base id).
+  - `generate_content_item` — dual path for the five supported types.
 - `assets/default_styles.json` — regenerated with the new keys.
-- `SKILL.md` — document the segment schema and body-only scope.
+- `SKILL.md` — segment schema, body-only scope, and the dash/star limitation.
 - `CHANGELOG.md` — new entry.
+
+No change to `render_paragraph` / `insert_paragraph_from_template` — confirmed not
+in the body content path.
+
+---
 
 ## Testing
 
-1. **Round-trip bold.** A `paragraph` (and one other type) with a bold segment
-   produces a section where exactly the bold run carries the discovered bold
-   charPrIDRef and the normal runs carry the base charPr.
+1. **Round-trip bold.** A `paragraph` with a bold segment yields a section where
+   exactly the bold run carries the discovered bold charPrIDRef (71 on the bundled
+   template) and normal runs carry the base charPr.
 2. **Backward-compat.** String `text` yields output byte-identical to the
-   pre-change generator for the same input (regression guard against accidental
-   path changes).
-3. **Layout invariance.** Flattened plain text equals the string form, so
-   `estimate_line_count` and the resulting `vertpos`/`lineseg` values match the
-   string-form output for the same visible text.
-4. **Discovery.** `_find_bold_twin` returns an exact twin for at least one body
-   base style on the MS_YOON template; the base-fallback path returns the base id
-   (no exception) when given a style with no bold twin.
-5. **Heading flattening.** A `heading` given a segment array renders its plain
-   text with no bold run and does not raise.
-6. **Validation.** A malformed segment raises `ValueError` naming the item.
+   pre-change generator for the same input.
+3. **Hangul layout safety (honest, not self-referential).** A Hangul-only bold
+   segment produces the **same line count** as the equivalent plain string — proves
+   the weight-invariant path for Hangul.
+4. **Latin bold widening.** A Latin/digit-heavy line, when bolded, produces a line
+   count **≥** the same text at normal weight — proves `_char_width`'s bold factor
+   is actually applied (this is the test rev. 1 lacked; it would have caught the
+   width bug).
+5. **Discovery — exact only.** `_find_bold_twin` returns 71 for base 38 on the
+   bundled template, and returns the **base id** (no exception, no loose match) for
+   a base with no exact twin (e.g., 397). A regression assertion confirms the
+   returned id, when not the base, is a true twin (identical minus `<hh:bold/>`).
+6. **Heading flattening.** A `heading` given a segment array renders plain text,
+   no bold run, no error.
+7. **Read-back / detection.** A segmented multi-run paragraph: `_extract_paragraph_first_text`
+   returns the flattened plain text, and marker-based classification
+   (`_count_body_headings` / paragraph classification) is unaffected.
+8. **Validation.** A malformed segment raises `ValueError` naming the item.
