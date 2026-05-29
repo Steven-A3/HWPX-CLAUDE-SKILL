@@ -289,6 +289,12 @@ DEFAULT_STYLE_MAP = {
     "cover_title":      ("25", "26", 2500, 2500, 2125, 1252),
     # Cover page date
     "cover_date":       ("37", "27", 2400, 2400, 2040, 1680),
+    # Bold twins for body styles (resolved per-template; default = base id)
+    "paragraph_bold":   "22",
+    "bullet_bold":      "22",
+    "dash_bold":        "15",
+    "star_bold":        "71",
+    "note_bold":        "22",
     # Border fill IDs
     "bf_none":          "1",
     "bf_table":         "3",
@@ -935,6 +941,20 @@ def build_style_map_from_template(template_dir, line_spacing_band=DEFAULT_LINE_S
                     sm['note'] = _make_style_tuple(cp, a['paraPrIDRef'], a['vertsize'],
                                                     a['textheight'], a['baseline'], a['spacing'])
                     break
+
+        # --- Bold twins for body styles (exact-twin discovery) ---
+        header_xml_text = header_path.read_text(encoding='utf-8')
+        for style_key, bold_key in (("paragraph", "paragraph_bold"),
+                                    ("bullet", "bullet_bold"),
+                                    ("dash", "dash_bold"),
+                                    ("star", "star_bold"),
+                                    ("note", "note_bold")):
+            base_cp = sm[style_key][0]
+            twin = _find_bold_twin(header_xml_text, base_cp)
+            sm[bold_key] = twin
+            if twin == base_cp:
+                print(f"Warning: no exact bold twin for '{style_key}' "
+                      f"(charPr {base_cp}); bold segments render normal weight.")
 
         # --- table_caption ---
         if table_caption_idx is not None:

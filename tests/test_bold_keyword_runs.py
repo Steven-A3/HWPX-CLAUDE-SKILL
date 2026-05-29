@@ -98,5 +98,23 @@ class TestFindBoldTwin(unittest.TestCase):
         self.assertEqual(G._find_bold_twin(self.header, "999999"), "999999")
 
 
+class TestStyleMapBoldKeys(unittest.TestCase):
+    def test_default_style_map_has_bold_keys(self):
+        for k in ("paragraph_bold", "bullet_bold", "dash_bold",
+                  "star_bold", "note_bold"):
+            self.assertIn(k, G.DEFAULT_STYLE_MAP)
+
+    def test_build_resolves_paragraph_bold_to_twin(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with zipfile.ZipFile(TEMPLATE) as zf:
+            zf.extractall(os.path.join(tmp.name, "t"))
+        sm = G.build_style_map_from_template(os.path.join(tmp.name, "t"))
+        self.assertIsNotNone(sm)
+        # paragraph base (38) has a twin -> resolved id differs from base.
+        self.assertIn("paragraph_bold", sm)
+        self.assertNotEqual(sm["paragraph_bold"], sm["paragraph"][0])
+
+
 if __name__ == "__main__":
     unittest.main()
