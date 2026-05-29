@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## [0.10.0] - 2026-05-29
+
+### Bold keyword runs in body text
+
+- **Bold segments.** `text` for paragraph/bullet/dash/star/note now accepts an
+  array of `{t, bold}` segments; bold spans render as separate runs using a
+  charPr discovered from the template (exact-twin match on font/size/color).
+- **Weight-aware line counting.** `_char_width` accounts for bold glyph width
+  (Hangul is weight-invariant; proportional glyphs widened) so line geometry
+  stays accurate for segmented text.
+- **Template prep.** `scripts/prepare_template_bold_twins.py` bakes missing exact
+  bold twins (dash, star) into the bundled template; `default_styles.json` and
+  `template.hwpx` regenerated. Backward compatible: string `text` is unchanged.
+
 ## [0.9.0] - 2026-05-27
 
 ### MS_YOON template adoption + 붙임/참고 title fix

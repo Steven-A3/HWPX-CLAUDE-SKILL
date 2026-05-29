@@ -113,6 +113,27 @@ Where `SKILL_DIR` is the directory containing this SKILL.md file, and `CONFIG_JS
 - The title is injected whether the template's title cell uses a single combined
   text run or a separate space-run + title-run.
 
+#### Bold keywords in body text
+
+For `paragraph`, `bullet`, `dash`, `star`, and `note` items, `text` may be either
+a plain string (no emphasis) or an array of segments to mark keywords bold:
+
+```json
+{ "type": "paragraph",
+  "text": [
+    {"t": "올해 "},
+    {"t": "목표 달성률", "bold": true},
+    {"t": "은 95%로 상승했다."}
+  ] }
+```
+
+Each segment is `{"t": "<text>", "bold": <true|false>}` (`bold` defaults to false).
+`heading` items ignore the array form (rendered as plain text); table cells do not
+support segments. The bold style is discovered from the template; if you swap in a
+template whose body styles lack a bold twin, run
+`python3 scripts/prepare_template_bold_twins.py path/to/template.hwpx` to bake the
+twins in (otherwise those segments render at normal weight, with a build warning).
+
 ### Content Types and Style Mapping
 
 | Type | Marker | Role |
