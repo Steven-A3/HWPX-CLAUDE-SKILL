@@ -167,5 +167,39 @@ class TestContentItemBold(unittest.TestCase):
                 self._sm(), G.VertPosTracker(), item_index=2)
 
 
+class TestPrepScript(unittest.TestCase):
+    def _twin_count(self, header):
+        return sum(1 for m in re.finditer(r'<hh:charPr id="\d+".*?</hh:charPr>',
+                                          header, re.DOTALL) if '<hh:bold' in m.group(0))
+
+    def test_prep_adds_missing_twins_and_is_idempotent(self):
+        from scripts import prepare_template_bold_twins as P
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        work = os.path.join(tmp.name, "template.hwpx")
+        import shutil; shutil.copy(TEMPLATE, work)
+
+        added1 = P.prepare(work)            # returns list of (style, new_id)
+        with zipfile.ZipFile(work) as zf:
+            header = zf.read("Contents/header.xml").decode("utf-8")
+        # itemCnt matches actual charPr count
+        ic = int(re.search(r'<hh:charProperties itemCnt="(\d+)"', header).group(1))
+        n = len(re.findall(r'<hh:charPr id="\d+"', header))
+        self.assertEqual(ic, n)
+        # every body style now resolves to a real twin
+        sm = self._build_sm(work)
+        for k in ("paragraph_bold", "dash_bold", "star_bold"):
+            base = sm[k[:-5]][0] if isinstance(sm[k[:-5]], (list, tuple)) else None
+            self.assertNotEqual(sm[k], base)
+
+        added2 = P.prepare(work)            # second run: no-op
+        self.assertEqual(added2, [])
+
+    def _build_sm(self, hwpx):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        with zipfile.ZipFile(hwpx) as zf:
+            zf.extractall(os.path.join(tmp.name, "t"))
+        return G.build_style_map_from_template(os.path.join(tmp.name, "t"))
+
+
 if __name__ == "__main__":
     unittest.main()
