@@ -53,10 +53,18 @@ select one *clean* source table, preferring tables that:
 From the chosen table, capture a **per-cell style profile** by position. For each
 of these row roles — **header**, **first-body**, **interior-body**, **last-body** —
 record, per column, the tuple:
-`(borderFillIDRef, charPrIDRef, paraPrIDRef, width, cellMargin, vertAlign)`.
+`(borderFillIDRef, charPrIDRef, paraPrIDRef, cellMargin, vertAlign)`.
+Also record the table's **total width** (Σ of the source table's column widths).
+
+> Note: per-column *widths* are **not** stored for verbatim reuse — they are
+> recomputed from content at render time (A3). The template's own tables size
+> columns to content (e.g. a 6-col table is `[4713, 6128, 10563, 8109, 13252,
+> 5328]`, not equal), so content-aware widths are *more* faithful than copying
+> fixed widths. Only the **total width** is reused, to preserve the table's
+> overall footprint.
 
 Store as a serializable entry `table_profiles` in the style map:
-`{ "<ncols>": { "header": [cell,...], "first": [...], "interior": [...], "last": [...] } }`.
+`{ "<ncols>": { "total_width": int, "header": [cell,...], "first": [...], "interior": [...], "last": [...] } }`.
 This persists into `assets/default_styles.json` (cache regenerated; keyed by
 template hash).
 
@@ -89,12 +97,36 @@ For a data table of **N columns × R data rows**:
 The cell-emitting helper is a generalization of `table_cell_xml` that takes a full
 per-cell style profile instead of the current fixed args.
 
-### A3. Fallback and widths
+### A3. Content-aware column widths
 
-- Column widths are the template's (matching the template is the goal).
+Column widths are computed from content within the profile's total width (the
+template tables themselves size columns to content):
+
+1. For each column `j`, intrinsic width
+   `w_j = max(estimate_text_width(text, char_height))` over the header cell and all
+   body cells in that column, where `char_height` is the relevant row's profile
+   font height; then add the cell's horizontal margins (`left + right`).
+2. Clamp each `w_j` to a minimum floor `MIN_COL_WIDTH` (enough for ~2 Korean
+   glyphs + margins) so no column collapses.
+3. Fit to `total_width` (from the profile):
+   - if `Σ w_j ≤ total_width`: distribute the slack proportionally to `w_j` so the
+     table fills its footprint (matching the template's full-width behavior);
+   - if `Σ w_j > total_width`: scale down proportionally but never below
+     `MIN_COL_WIDTH`; over-long cells then wrap to multiple lines (lineseg is
+     recomputed per the final width in A2, so wrapping renders correctly).
+4. Integer rounding: assign any rounding remainder to the widest column so
+   `Σ widths == total_width` exactly.
+
+The computed width feeds each cell's `cellSz` and its `lineseg` (A2). Border /
+font / paraPr / margin / vertAlign still come from the profile, so styling matches
+the template while widths fit the data.
+
+### A3b. Fallback
+
 - Any data whose column count is not in the catalog uses the existing generated
   `data_table_xml` path unchanged. This guarantees no regression for shapes the
-  template can't supply.
+  template can't supply. (The generated path may also adopt the content-aware
+  width helper, since it is independent of the profile.)
 
 ### A4. Verification
 
@@ -115,6 +147,8 @@ per-cell style profile instead of the current fixed args.
   - `data_table_xml` — profile-driven rendering with generated-path fallback.
   - a per-cell-profile cell emitter (generalizing `table_cell_xml`); keep
     `table_cell_xml` for the fallback path.
+  - new `_compute_column_widths(headers, rows, char_height, total_width)` helper
+    (content-aware widths, A3), built on the existing `estimate_text_width`.
   - `DEFAULT_STYLE_MAP` — add `table_profiles` default (`{}` → always falls back).
 - `assets/default_styles.json` — regenerated with `table_profiles`.
 - `tests/` — new tests.
@@ -132,9 +166,12 @@ per-cell style profile instead of the current fixed args.
    assignment and a bottom border on the final row.
 4. **Lineseg correctness:** multi-line cell text gets a recomputed lineseg with the
    right line count for the cell width (not a copied/stale one).
-5. **Fallback:** a column count absent from the template falls back to the
+5. **Content-aware widths:** a column with long text gets a wider column than a
+   short-label column; every column ≥ `MIN_COL_WIDTH`; `Σ widths == total_width`
+   exactly; each cell's `lineseg` reflects its final computed width.
+6. **Fallback:** a column count absent from the template falls back to the
    generated table and logs a warning; output still valid.
-6. **End-to-end:** a generated document with a reused table is a valid HWPX whose
+7. **End-to-end:** a generated document with a reused table is a valid HWPX whose
    table cell border fills match the template source.
 
 ---
