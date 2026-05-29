@@ -257,6 +257,11 @@ class TestEndToEnd(unittest.TestCase):
 
         # heading rendered without a bold run
         self.assertIn("추진 배경", body)
+        # heading text run (" 추진 배경" with leading space) must resolve to a NON-bold charPr
+        heading_id = run_id_for_text(body, " 추진 배경")
+        self.assertIsNotNone(heading_id, "heading text run not found in body XML")
+        self.assertFalse(charpr_is_bold(header, heading_id),
+                         "charPr %s used for heading ' 추진 배경' must NOT be bold" % heading_id)
 
 
 if __name__ == "__main__":
