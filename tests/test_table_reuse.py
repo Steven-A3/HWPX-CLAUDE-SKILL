@@ -105,5 +105,20 @@ class TestTableProfile(unittest.TestCase):
         self.assertNotEqual(bfs[0], bfs[-1])  # left corner != right corner
 
 
+class TestStyleMapTableProfiles(unittest.TestCase):
+    def test_default_has_empty_table_profiles(self):
+        self.assertIn("table_profiles", G.DEFAULT_STYLE_MAP)
+        self.assertEqual(G.DEFAULT_STYLE_MAP["table_profiles"], {})
+
+    def test_build_populates_table_profiles(self):
+        tmp = tempfile.TemporaryDirectory(); self.addCleanup(tmp.cleanup)
+        zipfile.ZipFile(TEMPLATE).extractall(os.path.join(tmp.name, "t"))
+        sm = G.build_style_map_from_template(os.path.join(tmp.name, "t"))
+        self.assertIn("table_profiles", sm)
+        self.assertTrue(sm["table_profiles"])  # non-empty for the bundled template
+        for ncols, prof in sm["table_profiles"].items():
+            self.assertEqual(len(prof["header"]), int(ncols))
+
+
 if __name__ == "__main__":
     unittest.main()

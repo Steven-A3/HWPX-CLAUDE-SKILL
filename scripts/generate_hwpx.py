@@ -309,6 +309,8 @@ DEFAULT_STYLE_MAP = {
     "star":             ("71", "48", 1300, 1300, 1105, 716),   # * detail
     "star_end":         ("71", "48", 1300, 1300, 1105, 716),
     "note":             ("22", "39", 1500, 1500, 1275, 900),   # ▷ note (post-table heuristic)
+    # Table style profiles keyed by column count (discovered per-template).
+    "table_profiles":   {},
     "table_caption":    ("27", "16", 1200, 1200, 1020, 720),   # < caption >
     "table_wrapper":    ("21", "22", 6104, 6104, 5188, 900),   # table container (base; overridden dynamically)
     "table_header":     ("35", "29", 1100, 1100, 935,  360),   # header cell
@@ -1208,6 +1210,14 @@ def build_style_map_from_template(template_dir, line_spacing_band=DEFAULT_LINE_S
                 h = cp_info.get('height', 1200)
                 pp = header_pp or '25'
                 sm['table_body'] = _make_style_tuple(body_cp, pp, h, h, int(h*0.85), 360)
+
+        # Per-position table style profiles keyed by column count.
+        try:
+            sm['table_profiles'] = _build_table_profile_catalog(
+                s1_xml, header_path.read_text(encoding='utf-8'))
+        except Exception as e:
+            print(f"Warning: could not build table profiles: {e}")
+            sm['table_profiles'] = {}
 
         # Phase E: Parse appendix section for appendix roles
         if appendix_section_path.exists():
