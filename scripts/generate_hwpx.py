@@ -89,7 +89,11 @@ def estimate_text_width(text, char_height):
     return sum(_char_width(ch, char_height) for ch in text)
 
 
-def _char_width(ch, char_height):
+# Bold proportional glyphs render wider; Hangul/CJK keep fixed em width.
+BOLD_WIDTH_FACTOR = 1.1
+
+
+def _char_width(ch, char_height, bold=False):
     """Get estimated rendered width of a single character."""
     if '\uAC00' <= ch <= '\uD7A3':      return char_height  # Korean syllables
     elif '\u3131' <= ch <= '\u318E':     return char_height  # Korean jamo
@@ -98,8 +102,11 @@ def _char_width(ch, char_height):
     elif ord(ch) >= 0x2E80:              return char_height  # CJK, symbols
     elif ch == ' ':                      return int(char_height * 0.25)
     elif ch.isascii() and (ch.isalpha() or ch.isdigit()):
-                                         return int(char_height * 0.50)
-    else:                                return int(char_height * 0.55)
+        w = char_height * 0.50
+        return int(w * BOLD_WIDTH_FACTOR) if bold else int(w)
+    else:
+        w = char_height * 0.55
+        return int(w * BOLD_WIDTH_FACTOR) if bold else int(w)
 
 
 # Effective width ratio: 91% of horzsize matches Hancom's rendering.
@@ -166,6 +173,36 @@ def estimate_line_breaks(text, char_height, horzsize=HORZSIZE_DEFAULT):
             last_space_pos = None  # Reset for next line
 
     return breaks
+
+
+def _segmented_line_count(segments, char_height, horzsize=HORZSIZE_DEFAULT):
+    """Line count for a list of (text, bold) segments, weight-aware.
+
+    Mirrors estimate_line_breaks() but applies each character's bold flag to
+    its width. For all-normal segments this equals estimate_line_count() on the
+    joined text.
+    """
+    chars = [(ch, bold) for text, bold in segments for ch in text]
+    if not chars:
+        return 1
+    effective_width = int(horzsize * EFFECTIVE_WIDTH_RATIO)
+    breaks = [0]
+    cumulative_width = 0
+    last_space_pos = None
+    for i, (ch, bold) in enumerate(chars):
+        cumulative_width += _char_width(ch, char_height, bold)
+        if ch == ' ':
+            last_space_pos = i + 1
+        if cumulative_width > effective_width:
+            if last_space_pos and last_space_pos > breaks[-1]:
+                breaks.append(last_space_pos)
+                cumulative_width = sum(_char_width(c, char_height, b)
+                                       for c, b in chars[last_space_pos:i + 1])
+            elif i > breaks[-1]:
+                breaks.append(i)
+                cumulative_width = _char_width(ch, char_height, bold)
+            last_space_pos = None
+    return len(breaks)
 
 
 # ============================================================================
