@@ -89,6 +89,60 @@ def estimate_text_width(text, char_height):
     return sum(_char_width(ch, char_height) for ch in text)
 
 
+# Minimum table column width (~2 Korean glyphs + L/R cell margins) in HWPUNIT.
+MIN_COL_WIDTH = 3000
+
+
+def _compute_column_widths(headers, rows, char_height, total_width,
+                           min_col_width=MIN_COL_WIDTH, h_margin=1020):
+    """Compute per-column widths from content, fitted to total_width.
+
+    Per-column intrinsic width = max rendered text width of header+body cells
+    (+ h_margin), floored at min_col_width. Then water-fill: fix columns at the
+    floor and distribute the remaining budget proportionally among the rest, so
+    the widths sum EXACTLY to total_width whenever that is feasible
+    (n*min_col_width <= total_width). When infeasible, every column sits at the
+    floor and the sum necessarily exceeds total_width. Returns list of ints.
+    """
+    n = len(headers)
+    if n == 0:
+        return []
+    intrinsic = []
+    for j in range(n):
+        texts = [headers[j]] + [str(r[j]) for r in rows if j < len(r)]
+        w = max((estimate_text_width(t, char_height) for t in texts), default=0)
+        intrinsic.append(max(min_col_width, w + h_margin))
+
+    widths = [0] * n
+    fixed = [False] * n
+    remaining = total_width
+    while True:
+        free = [j for j in range(n) if not fixed[j]]
+        if not free:
+            break
+        free_intrinsic = sum(intrinsic[j] for j in free)
+        if free_intrinsic <= 0:
+            for j in free:
+                widths[j] = max(min_col_width, remaining // len(free))
+            break
+        for j in free:
+            widths[j] = remaining * intrinsic[j] // free_intrinsic
+        newly_fixed = False
+        for j in free:
+            if widths[j] < min_col_width:
+                widths[j] = min_col_width
+                fixed[j] = True
+                remaining -= min_col_width
+                newly_fixed = True
+        if not newly_fixed:
+            # all free columns >= floor; assign rounding remainder to widest free
+            diff = total_width - sum(widths)
+            widest = max(free, key=lambda j: widths[j])
+            widths[widest] += diff
+            break
+    return widths
+
+
 # Bold proportional glyphs render wider; Hangul/CJK keep fixed em width.
 BOLD_WIDTH_FACTOR = 1.1
 
@@ -267,6 +321,8 @@ DEFAULT_STYLE_MAP = {
     "star":             ("71", "48", 1300, 1300, 1105, 716),   # * detail
     "star_end":         ("71", "48", 1300, 1300, 1105, 716),
     "note":             ("22", "39", 1500, 1500, 1275, 900),   # ▷ note (post-table heuristic)
+    # Table style profiles keyed by column count (discovered per-template).
+    "table_profiles":   {},
     "table_caption":    ("27", "16", 1200, 1200, 1020, 720),   # < caption >
     "table_wrapper":    ("21", "22", 6104, 6104, 5188, 900),   # table container (base; overridden dynamically)
     "table_header":     ("35", "29", 1100, 1100, 935,  360),   # header cell
@@ -538,6 +594,124 @@ def _extract_table_cells(para_xml):
             'paraPrIDRefs': para_prs,
         })
     return cells
+
+
+def _extract_table_cells_rich(para_xml):
+    """Like _extract_table_cells but also captures cellSz width, vertAlign,
+    cellMargin, and the primary charPr/paraPr. Returns list of dicts:
+    rowAddr, colAddr, bf, charPr, paraPr, width, height, valign, margin{l,r,t,b}.
+    Cells with rowSpan/colSpan > 1 set 'spanned' True.
+    """
+    cells = []
+    for tc_m in re.finditer(r'<hp:tc\b([^>]*)>(.*?)</hp:tc>', para_xml, re.DOTALL):
+        attrs, body = tc_m.group(1), tc_m.group(2)
+        addr = re.search(r'<hp:cellAddr\s+colAddr="(\d+)"\s+rowAddr="(\d+)"', body)
+        bf = re.search(r'borderFillIDRef="(\d+)"', attrs)
+        cp = re.search(r'charPrIDRef="(\d+)"', body)
+        pp = re.search(r'paraPrIDRef="(\d+)"', body)
+        sz = re.search(r'<hp:cellSz\s+width="(\d+)"\s+height="(\d+)"', body)
+        va = re.search(r'vertAlign="(\w+)"', body)
+        span = re.search(r'<hp:cellSpan\s+colSpan="(\d+)"\s+rowSpan="(\d+)"', body)
+        mg = re.search(r'<hp:cellMargin\s+left="(\d+)"\s+right="(\d+)"\s+top="(\d+)"\s+bottom="(\d+)"', body)
+        cells.append({
+            "rowAddr": int(addr.group(2)) if addr else -1,
+            "colAddr": int(addr.group(1)) if addr else -1,
+            "bf": bf.group(1) if bf else "1",
+            "charPr": cp.group(1) if cp else "0",
+            "paraPr": pp.group(1) if pp else "0",
+            "width": int(sz.group(1)) if sz else 0,
+            "height": int(sz.group(2)) if sz else 0,
+            "valign": va.group(1) if va else "CENTER",
+            "margin": ({"left": int(mg.group(1)), "right": int(mg.group(2)),
+                        "top": int(mg.group(3)), "bottom": int(mg.group(4))}
+                       if mg else {"left": 510, "right": 510, "top": 141, "bottom": 141}),
+            "spanned": bool(span and (int(span.group(1)) > 1 or int(span.group(2)) > 1)),
+        })
+    return cells
+
+
+def _char_height_of(header_xml, char_pr_id):
+    """Look up a charPr's height (HWPUNIT) from header.xml; default 1200."""
+    m = re.search(r'<hh:charPr id="%s"[^>]*height="(\d+)"' % char_pr_id, header_xml)
+    return int(m.group(1)) if m else 1200
+
+
+def _build_table_profile(table_para_xml, header_xml):
+    """Build a per-position style profile from ONE data-table paragraph.
+
+    Returns a profile dict or None if the table is unsuitable (has spanned
+    cells, no header row, < 2 body rows, or is not a full rectangular grid).
+    """
+    cells = _extract_table_cells_rich(table_para_xml)
+    if not cells or any(c["spanned"] for c in cells):
+        return None
+    rows = {}
+    for c in cells:
+        rows.setdefault(c["rowAddr"], {})[c["colAddr"]] = c
+    row_ids = sorted(r for r in rows if r >= 0)
+    if len(row_ids) < 3:                      # need header + >=2 body rows
+        return None
+    ncols = max(len(rows[r]) for r in row_ids)
+    for r in row_ids:                          # require a clean rectangular grid
+        if len(rows[r]) != ncols or any(j not in rows[r] for j in range(ncols)):
+            return None
+
+    def row_cells(r):
+        return [rows[r][j] for j in range(ncols)]
+
+    header_r, first_r, last_r = row_ids[0], row_ids[1], row_ids[-1]
+    interior_r = row_ids[2] if len(row_ids) >= 4 else row_ids[1]
+
+    # Require the header row to be a coherent header BAND, not column striping.
+    # A real header band has uniform interior fills (optionally distinct
+    # corners); an alternating pattern like 71/21/71/21/71 is decorative column
+    # shading on a data row, not a header, so such tables are unsuitable.
+    hdr_bfs = [rows[header_r][j]["bf"] for j in range(ncols)]
+    if ncols > 2 and len(set(hdr_bfs[1:-1])) != 1:
+        return None
+
+    def style_row(r):
+        return [{"bf": c["bf"], "charPr": c["charPr"], "paraPr": c["paraPr"],
+                 "valign": c["valign"]} for c in row_cells(r)]
+
+    hdr_cells = row_cells(header_r)
+    body_cells = row_cells(first_r)
+    total_width = sum(c["width"] for c in hdr_cells)
+    return {
+        "total_width": total_width,
+        "cell_margin": hdr_cells[0]["margin"],
+        "header_h": _char_height_of(header_xml, hdr_cells[0]["charPr"]),
+        "body_h": _char_height_of(header_xml, body_cells[0]["charPr"]),
+        "row_h": {"header": hdr_cells[0]["height"], "first": body_cells[0]["height"],
+                  "interior": row_cells(interior_r)[0]["height"],
+                  "last": row_cells(last_r)[0]["height"]},
+        "header": style_row(header_r),
+        "first": style_row(first_r),
+        "interior": style_row(interior_r),
+        "last": style_row(last_r),
+    }
+
+
+def _build_table_profile_catalog(body_section_xml, header_xml):
+    """Scan a body section for clean data tables and return
+    {ncols(str): profile} keeping the first clean table found per column count."""
+    catalog = {}
+    paras, _ = _extract_all_top_level_paragraphs(body_section_xml)
+    attrs = [_extract_para_attrs(p) for p in paras]
+    for i, a in enumerate(attrs):
+        if not (a['has_tbl'] and not a['has_colpr']):
+            continue
+        prof = _build_table_profile(paras[i], header_xml)
+        if prof is None:
+            continue
+        key = str(len(prof["header"]))
+        # Known limitation: keeps the FIRST clean table per column count. This is
+        # order-dependent; the uniform-interior guard in _build_table_profile is
+        # what prevents a decorative/striped table from being chosen. If a future
+        # template needs different selection, score candidates instead of first-wins.
+        if key not in catalog:
+            catalog[key] = prof
+    return catalog
 
 
 def _make_style_tuple(char_pr_id, para_pr_id, vertsize, textheight, baseline, spacing):
@@ -1048,6 +1222,14 @@ def build_style_map_from_template(template_dir, line_spacing_band=DEFAULT_LINE_S
                 h = cp_info.get('height', 1200)
                 pp = header_pp or '25'
                 sm['table_body'] = _make_style_tuple(body_cp, pp, h, h, int(h*0.85), 360)
+
+        # Per-position table style profiles keyed by column count.
+        try:
+            sm['table_profiles'] = _build_table_profile_catalog(
+                s1_xml, header_path.read_text(encoding='utf-8'))
+        except Exception as e:
+            print(f"Warning: could not build table profiles: {e}")
+            sm['table_profiles'] = {}
 
         # Phase E: Parse appendix section for appendix roles
         if appendix_section_path.exists():
@@ -1691,26 +1873,122 @@ def appendix_bar_xml(tab_label, title_text, sm, table_id=1977606721):
 # Data Table Generator (with dynamic height)
 # ============================================================================
 
+def _profile_cell_xml(col, row, width, height, text, cell, char_h, margin):
+    """Emit one <hp:tc> reusing a profile cell's style, with regenerated text
+    and a recomputed lineseg for the given width (Hancom does not recalc)."""
+    inner_hz = max(width - (margin["left"] + margin["right"]) - 2, 0)
+    nlines = estimate_line_count(text, char_h, inner_hz) if text else 1
+    baseline = int(char_h * 0.85)
+    return (f'<hp:tc name="" header="0" hasMargin="0" protect="0" editable="0" dirty="0" '
+            f'borderFillIDRef="{cell["bf"]}">'
+            f'<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" '
+            f'vertAlign="{cell["valign"]}" linkListIDRef="0" linkListNextIDRef="0" '
+            f'textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0">'
+            f'<hp:p id="2147483648" paraPrIDRef="{cell["paraPr"]}" styleIDRef="0" '
+            f'pageBreak="0" columnBreak="0" merged="0">'
+            f'{run_xml(cell["charPr"], text)}'
+            f'{lineseg_xml(vertsize=char_h, textheight=char_h, baseline=baseline, spacing=360, horzsize=inner_hz, num_lines=nlines, full_text=text)}'
+            f'</hp:p></hp:subList>'
+            f'<hp:cellAddr colAddr="{col}" rowAddr="{row}"/>'
+            f'<hp:cellSpan colSpan="1" rowSpan="1"/>'
+            f'<hp:cellSz width="{width}" height="{height}"/>'
+            f'<hp:cellMargin left="{margin["left"]}" right="{margin["right"]}" '
+            f'top="{margin["top"]}" bottom="{margin["bottom"]}"/>'
+            f'</hp:tc>')
+
+
+def _row_height(texts, widths, char_h, base_h, margin):
+    """Row height = max over cells of (wrapped lines) accommodated, >= base_h."""
+    max_lines = 1
+    for t, w in zip(texts, widths):
+        if t:
+            max_lines = max(max_lines, estimate_line_count(t, char_h, max(w - (margin["left"] + margin["right"]) - 2, 0)))
+    computed = max_lines * char_h + (max_lines - 1) * 360 + margin["top"] + margin["bottom"]
+    return max(base_h, computed)
+
+
+def _data_table_from_profile(headers, rows, prof, sm, caption, table_id):
+    """Render a data table reusing a template profile. Returns (xml, wrapper_vs)."""
+    ncols = len(headers)
+    total_width = prof["total_width"]
+    margin = prof["cell_margin"]
+    widths = _compute_column_widths(headers, rows, max(prof["header_h"], prof["body_h"]),
+                                    total_width, h_margin=margin["left"] + margin["right"])
+    R = len(rows)
+
+    def body_role(i):
+        if R == 1:
+            return "last"
+        if i == 0:
+            return "first"
+        if i == R - 1:
+            return "last"
+        return "interior"
+
+    h_h = _row_height(headers, widths, prof["header_h"], prof["row_h"]["header"], margin)
+    header_cells = "".join(
+        _profile_cell_xml(j, 0, widths[j], h_h, str(headers[j]), prof["header"][j],
+                          prof["header_h"], margin)
+        for j in range(ncols))
+    total_height = h_h
+    body_rows = ""
+    for i, row in enumerate(rows):
+        role = body_role(i)
+        texts = [str(row[j]) if j < len(row) else "" for j in range(ncols)]
+        rh = _row_height(texts, widths, prof["body_h"], prof["row_h"][role], margin)
+        total_height += rh
+        cells = "".join(
+            _profile_cell_xml(j, i + 1, widths[j], rh, texts[j], prof[role][j],
+                              prof["body_h"], margin)
+            for j in range(ncols))
+        body_rows += f'<hp:tr>{cells}</hp:tr>'
+
+    paragraphs = ""
+    if caption:
+        tc = sm["table_caption"]
+        paragraphs += paragraph_xml(tc[1], "0", run_xml(tc[0], f"< {caption} >"),
+                                     lineseg_xml(vertsize=tc[2], textheight=tc[3], baseline=tc[4], spacing=tc[5]))
+    wrapper_vertsize = total_height + 566
+    tw = sm["table_wrapper"]
+    tbl = (f'<hp:tbl id="{table_id}" zOrder="0" numberingType="TABLE" '
+           f'textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" '
+           f'pageBreak="CELL" repeatHeader="1" rowCnt="{R + 1}" colCnt="{ncols}" '
+           f'cellSpacing="0" borderFillIDRef="{prof["interior"][0]["bf"]}" noAdjust="0">'
+           f'<hp:sz width="{total_width}" widthRelTo="ABSOLUTE" height="{total_height}" heightRelTo="ABSOLUTE" protect="0"/>'
+           f'<hp:pos treatAsChar="1" affectLSpacing="0" flowWithText="1" allowOverlap="0" '
+           f'holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA" vertAlign="TOP" horzAlign="LEFT" '
+           f'vertOffset="0" horzOffset="0"/>'
+           f'<hp:outMargin left="283" right="283" top="283" bottom="283"/>'
+           f'<hp:inMargin left="{margin["left"]}" right="{margin["right"]}" top="{margin["top"]}" bottom="{margin["bottom"]}"/>'
+           f'<hp:tr>{header_cells}</hp:tr>{body_rows}</hp:tbl>')
+    paragraphs += paragraph_xml(tw[1], "0",
+                                 f'<hp:run charPrIDRef="{tw[0]}">{tbl}<hp:t/></hp:run>',
+                                 lineseg_xml(vertsize=wrapper_vertsize, textheight=wrapper_vertsize,
+                                             baseline=int(wrapper_vertsize * 0.85), spacing=tw[5]))
+    return paragraphs, wrapper_vertsize
+
+
 def data_table_xml(headers, rows, sm, caption="", table_id=1974981391):
-    """Generate a data table with header row and body rows."""
+    """Generate a data table. Reuses a template style profile for the table's
+    column count when available; otherwise falls back to a generated table."""
     num_cols = len(headers)
+    prof = sm.get("table_profiles", {}).get(str(num_cols))
+    if prof:
+        return _data_table_from_profile(headers, rows, prof, sm, caption, table_id)
+
+    print(f"Warning: no table profile for {num_cols}-column table; using generated fallback.")
+    # ---- fallback: generated table (original behavior, content-aware widths) ----
     num_rows = len(rows) + 1
     total_width = 47622
-    col_width = total_width // num_cols
-    col_widths = [col_width] * num_cols
-    col_widths[-1] += total_width - col_width * num_cols
+    col_widths = _compute_column_widths(headers, rows, sm["table_body"][2], total_width)
     row_height = 2048
     total_height = row_height * num_rows
-
-    th = sm["table_header"]
-    tb = sm["table_body"]
-
+    th = sm["table_header"]; tb = sm["table_body"]
     header_cells = ""
     for i, (hdr, w) in enumerate(zip(headers, col_widths)):
         header_cells += table_cell_xml(i, 0, w, row_height, sm["bf_table_header"],
                                         th[1], th[0], hdr,
                                         vertsize=th[2], textheight=th[3], baseline=th[4], spacing=th[5])
-
     body_rows = ""
     for r_idx, row in enumerate(rows):
         cells = ""
@@ -1719,16 +1997,12 @@ def data_table_xml(headers, rows, sm, caption="", table_id=1974981391):
                                      tb[1], tb[0], str(cell_text),
                                      vertsize=tb[2], textheight=tb[3], baseline=tb[4], spacing=tb[5])
         body_rows += f'<hp:tr>{cells}</hp:tr>'
-
     paragraphs = ""
     if caption:
         tc = sm["table_caption"]
         paragraphs += paragraph_xml(tc[1], "0", run_xml(tc[0], f"< {caption} >"),
                                      lineseg_xml(vertsize=tc[2], textheight=tc[3], baseline=tc[4], spacing=tc[5]))
-
-    # Dynamic wrapper vertsize based on actual table height + margins
-    wrapper_vertsize = total_height + 566   # table height + top/bottom outMargin (283*2)
-
+    wrapper_vertsize = total_height + 566
     tw = sm["table_wrapper"]
     tbl = (f'<hp:tbl id="{table_id}" zOrder="0" numberingType="TABLE" '
            f'textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" '
@@ -1741,7 +2015,6 @@ def data_table_xml(headers, rows, sm, caption="", table_id=1974981391):
            f'<hp:outMargin left="283" right="283" top="283" bottom="283"/>'
            f'<hp:inMargin left="510" right="510" top="141" bottom="141"/>'
            f'<hp:tr>{header_cells}</hp:tr>{body_rows}</hp:tbl>')
-
     paragraphs += paragraph_xml(tw[1], "0",
                                  f'<hp:run charPrIDRef="{tw[0]}">{tbl}<hp:t/></hp:run>',
                                  lineseg_xml(vertsize=wrapper_vertsize, textheight=wrapper_vertsize,

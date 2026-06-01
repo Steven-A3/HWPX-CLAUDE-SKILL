@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## [0.11.0] - 2026-05-29
+
+### Template-matched tables + 개조식 authoring rules
+
+- **Table style reuse.** Generated data tables now reuse a real template table's
+  per-position cell styling (border fills, fonts, alignment) discovered into
+  `table_profiles`, instead of fabricating uniform borders. Column counts with no
+  template match fall back to the generated table.
+- **Content-aware column widths.** Column widths are computed from cell content
+  within the template table's total width (the template itself sizes columns to
+  content), with a minimum-width floor.
+- **개조식 authoring rules.** SKILL.md gains a mandatory section requiring terse,
+  itemized Korean-government 개조식 output — never verbatim source text.
+
 ## [0.10.0] - 2026-05-29
 
 ### Bold keyword runs in body text

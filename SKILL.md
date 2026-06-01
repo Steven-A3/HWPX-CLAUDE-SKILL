@@ -163,6 +163,32 @@ hard-coded against a specific template.
   `title_bar` to the tab label (`"붙임"`, `"참고1"`, …) and `appendix_title` to the
   bar title (**required** — see above).
 
+## 개조식 Authoring Rules (MANDATORY)
+
+When turning any source material into report content, you MUST produce Korean
+government 개조식(個條式) style. Never paste or lightly-edit source text verbatim.
+
+1. **Summarize, never transcribe.** Reduce each source passage to its essential
+   point(s). Copying a sentence and tweaking it is a violation.
+2. **Nominalized / 음슴체 endings.** End each line on a noun or nominal form
+   (`~함, ~필요, ~추진, ~예정, ~검토, ~전환`), never 서술식 (`~한다 / ~이다 / ~했다`).
+3. **One idea per line, with hierarchy** `□` heading → `○` bullet → `-` dash →
+   `*` detail. Split compound sentences into separate lines.
+4. **Lead with a label** where natural: `(배경)`, `(현황)`, `(추진방향)`, `(기대효과)`.
+5. **Strip connectives and redundant subjects;** keep numbers, proper nouns, and
+   key terms.
+6. **Bold the key term** in each line using the `{ "t": "...", "bold": true }`
+   segment form (see "Bold keywords in body text").
+7. **Tabulate enumerable / comparative data** (years, figures, categories) instead
+   of writing it as prose. Tables automatically reuse the template's table style.
+
+**Example — before → after**
+
+- 서술식 (WRONG, verbatim): "AI가 인간 주니어 개발자보다 더 빠르고 정확하게 코드를 짜는
+  2026년, 진짜 중요한 능력은 '문법'이 아니라 '의도(Intent)'를 설계하는 능력이다."
+- 개조식 (RIGHT): `○ (핵심역량 전환)` AI가 코드 작성 대체 → 인간 경쟁력은
+  **'의도(Intent) 설계'** 로 이동
+
 ## HWPX File Structure Reference
 
 ```
